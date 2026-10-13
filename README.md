@@ -6,6 +6,8 @@
 
 目前是可執行的建置工具與中文閱讀介面，尚未完成全站批次翻譯；不要將開發預覽視為完整中文譯本。代理接手前請先讀 [AGENTS.md](AGENTS.md)。
 
+2026-10-13 模型片段對比與 Astra 補測已完成：18 個請求配置、17 組成功、68 段譯文；Ultra 被後端拒絕。詳見 [結果與交接紀錄](benchmarks/RESULTS-2026-10-13.md)。完整匿名報告與原始結果由本機資料包交付，不包含於 Git。
+
 ## 本機啟動
 
 需要 Node.js 22 或更新版本。首次下載來源需要網路；完成後使用同一份來源快照。
@@ -104,7 +106,9 @@ npm start
 
 ## 片段翻譯對比
 
-`npm run benchmark` 只預覽配置；`npm run benchmark -- --execute --run-dir artifacts/translation-benchmark/my-run` 才會呼叫模型並消耗用量。共 15 組：DeepSeek V4.1 Flash、V4 Pro 各 low/high/max；Codex GPT-6.1 Sol、GPT-6 Astra、GPT-6 Sol 各 low/medium/high。Codex 使用本機已有的 OAuth 登入與 pi-ai adapter；詳見 [AGENTS.md](AGENTS.md)。
+`npm run benchmark` 只預覽配置；`npm run benchmark -- --execute --run-dir artifacts/translation-benchmark/my-run` 才會呼叫模型並消耗用量。共 18 組請求配置：DeepSeek V4.1 Flash、V4 Pro 各 low/high/max；Codex GPT-6.1 Sol、GPT-6 Astra、GPT-6 Sol 各 low/medium/high，另加 Astra xhigh/ultra/max。Ultra 未列於官方模型文件；此項精確傳送使用者要求的值，以後端實際回傳或拒絕為準，不保證支援、不替換檔位。Codex 使用本機已有的 OAuth 登入與 pi-ai adapter；詳見 [AGENTS.md](AGENTS.md)。
+
+補測可用 `--only` 指定一個或以逗號分隔的多個配置，例如 `--only gpt-6-astra-xhigh,gpt-6-astra-ultra,gpt-6-astra-max`。在既有 run 加入配置須另加 `--append-configurations`，保留舊 manifest 歷史與原有結果；提示、原文、術語及價格 hash 必須一致。匿名報告會保留已存在的代號，替新增配置追加代號。
 
 每組翻譯同樣四段自編音樂領域英文，並保留原始簡體輸出，不是 Musicmap 原文，也不直接加入網站語料。執行 `npm run benchmark:report -- artifacts/translation-benchmark/my-run` 產生離線匿名比較頁、完整文字報告與用量 CSV。品質由使用者判斷，工具不評分、不排名。
 

@@ -6,8 +6,8 @@ import { calculateCost, normalizeUsage } from '../lib/benchmark-cost.mjs';
 
 const usageFields = ['input', 'cacheRead', 'cacheWrite', 'output', 'reasoning', 'total'];
 const csvColumns = [
-  'rowType', 'attemptFile', 'attemptRecorded', 'rawUsagePresent', 'label', 'id', 'provider', 'model', 'effort', 'status', 'sourceStatus', 'returnedModel', 'returnedEffort',
-  'serviceTier', 'startedAt', 'finishedAt', 'latencyMs', ...usageFields,
+  'rowType', 'attemptFile', 'attemptRecorded', 'rawUsagePresent', 'label', 'id', 'provider', 'model', 'effort', 'status', 'sourceStatus', 'returnedModel', 'returnedEffort', 'responseMismatch',
+  'serviceTier', 'httpStatus', 'startedAt', 'finishedAt', 'latencyMs', ...usageFields,
   'usdMin', 'usdMax', 'cnyMin', 'cnyMax', 'costBasis', 'costNotes', 'error',
 ];
 
@@ -94,11 +94,24 @@ async function labelsFor(directory, ids) {
     await fs.writeFile(file, `${JSON.stringify(labels, null, 2)}\n`, { flag: 'wx' });
   }
   const assigned = labels.assignments;
-  if (!Array.isArray(assigned) || assigned.length !== ids.length
-    || new Set(assigned.map((row) => row.id)).size !== ids.length
-    || new Set(assigned.map((row) => row.label)).size !== ids.length
-    || !assigned.every((row) => ids.includes(row.id) && /^[A-Z]+$/.test(row.label))) {
+  if (!Array.isArray(assigned) || !assigned.length || typeof labels.seed !== 'string'
+    || !assigned.every((row) => row && ids.includes(row.id) && typeof row.label === 'string' && /^[A-Z]+$/.test(row.label))
+    || new Set(assigned.map((row) => row.id)).size !== assigned.length
+    || new Set(assigned.map((row) => row.label)).size !== assigned.length) {
     throw new Error('Existing anonymous-labels.json does not match this run. Preserve the old run and use a new run directory.');
+  }
+  const missing = ids.filter((id) => !assigned.some((row) => row.id === id));
+  if (missing.length) {
+    // Supplemental configurations get new labels; previously read translations
+    // must keep their labels, order, and seed across report regeneration.
+    let nextIndex = Math.max(...assigned.map(({ label }) => [...label].reduce((value, char) => value * 26 + char.charCodeAt(0) - 64, 0)));
+    if (!Number.isSafeInteger(nextIndex + missing.length)) throw new Error('Anonymous labels exceed the supported range.');
+    for (const id of shuffled(missing, `${labels.seed}:append:${assigned.length}`)) {
+      assigned.push({ id, label: letterLabel(nextIndex++) });
+    }
+    const temporary = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+    await fs.writeFile(temporary, `${JSON.stringify(labels, null, 2)}\n`, { flag: 'wx' });
+    await fs.rename(temporary, file);
   }
   return labels;
 }
@@ -117,21 +130,28 @@ function normalizeResult(config, result, label) {
   const sourceStatus = String(result?.status ?? 'pending');
   const status = sourceStatus === 'success' ? 'success'
     : !result || ['pending', 'received'].includes(sourceStatus) ? 'pending' : 'error';
+  const rawUsagePresent = Boolean(result?.rawUsage && typeof result.rawUsage === 'object' && Object.keys(result.rawUsage).length);
+  const httpStatus = Number.isInteger(result?.httpStatus) ? result.httpStatus : null;
+  const error = String(result?.error ?? '');
+  const failureNote = error === 'REASONING_EFFORT_REJECTED'
+    ? `後端拒絕此推理檔位${httpStatus == null ? '' : `（HTTP ${httpStatus}）`}；未取得譯文${rawUsagePresent ? '。' : '，用量未回傳。'}` : '';
   return {
     id: config.id, label, provider: String(config.provider ?? ''), model: String(config.model ?? ''),
     effort: String(config.effort ?? ''), status, sourceStatus,
     rowType: 'final_result', attemptFile: `results/${config.id}.json`,
     attemptRecorded: Boolean(result && (result.startedAt || ['success', 'error', 'received'].includes(sourceStatus))),
-    rawUsagePresent: Boolean(result?.rawUsage && typeof result.rawUsage === 'object' && Object.keys(result.rawUsage).length),
+    rawUsagePresent, httpStatus, failureNote,
     startedAt: result?.startedAt ?? null, finishedAt: result?.finishedAt ?? null,
     latencyMs: numberOrNull(result?.latencyMs), returnedModel: String(result?.returnedModel ?? ''),
     returnedEffort: String(result?.returnedEffort ?? ''), serviceTier: String(result?.serviceTier ?? ''),
+    responseMismatch: Boolean((result?.returnedModel && result.returnedModel !== config.model)
+      || (result?.returnedEffort && result.returnedEffort !== config.effort)),
     text: String(result?.text ?? ''),
     translations: (Array.isArray(result?.translations) ? result.translations : []).map((entry) => ({ id: String(entry.id), text: String(entry.text ?? '') })),
     usage: Object.fromEntries(usageFields.map((field) => [field, numberOrNull(result?.usage?.[field])])),
     cost: { usd: priceRange(result?.cost?.usd), cny: priceRange(result?.cost?.cny), band: String(result?.cost?.band ?? ''),
       basis: String(result?.cost?.basis ?? ''), notes: [...(result?.cost?.notes ?? []).map(String), ...(result?.cost?.band ? [`DeepSeek price band: ${result.cost.band}`] : [])] },
-    error: String(result?.error ?? ''),
+    error,
   };
 }
 
@@ -147,6 +167,7 @@ const methodNotes = [
   '這是一組自寫的音樂領域測試片段，原定每個配置取得一份成功結果。失敗後的重試是補足結果，不是系統性的重複抽樣；無法估計輸出變異或穩定性，也不能由這一組結果推論全站翻譯品質或其他題材的表現。實際嘗試次數另行列出。',
   '快取狀態未受控，延遲亦會受服務負載與網路影響。不同供應商的 token 切分方式不同；彙總 token 僅是本輪用量記錄，不是跨供應商效率或品質分數。',
   '檔位欄位首先記錄請求所指定的 effort。API 若未回傳 effort，就無法僅憑回應確認後端是否使用該檔位；即使有回傳，也只是供應商的回應欄位，不是對實際推理計算量的獨立量測。',
+  '回傳模型或檔位若與請求不同，報告會標示設定不符，不能把該回應當成已確認使用原請求設定的結果。被拒絕的配置保留失敗紀錄，不以其他檔位的譯文替代。',
   'DeepSeek 費用是官方價目與回傳用量的估算，Codex 費用是同用量的 API 等價估算；兩者不是同一種實際付款記錄，因此分開彙總。未回傳用量的失敗請求不能當成免費。',
 ];
 
@@ -220,6 +241,7 @@ function markdownFor(data) {
     `實際紀錄：${data.attemptSummary.total} 次嘗試，其中 ${data.attemptSummary.additional} 次為封存的額外嘗試；${data.attemptSummary.successful}/${data.results.length} 個配置取得成功結果。${data.attemptSummary.unknownSpend} 次嘗試缺少原始用量或完整計價，實際費用仍有未知部分；已知成本區間不包含未知費用，不能當成整輪花費上限。`, '',
     '字母代號由本機隨機分配，同一 run 重新產生報告時保持不變。模型映射與用量位於本文末尾；若希望先隱藏它們，請使用 report.html。匿名僅是閱讀介面，檔案內仍含模型資料。', '',
   ];
+  if (data.supplementationNote) lines.push(data.supplementationNote, '');
   for (const passage of data.passages) {
     lines.push(`## ${passage.title}`, '', '英文原文：', '', codeBlock(passage.text), '');
     for (const result of data.results) {
@@ -227,7 +249,7 @@ function markdownFor(data) {
       lines.push(`### 譯本 ${result.label}`, '');
       if (translation) lines.push(codeBlock(translation.text), '');
       else lines.push(result.status === 'pending' ? '尚未取得結果。' : '沒有這個片段的可用譯文。', '');
-      if (result.status === 'error') lines.push('請求或結果處理失敗：', '', codeBlock(result.error || '未提供錯誤細節'), '');
+      if (result.status === 'error') lines.push(result.failureNote || '請求或結果處理失敗：', '', codeBlock(result.error || '未提供錯誤細節'), '');
     }
   }
   lines.push('## 模型映射與用量（揭曉）', '',
@@ -244,7 +266,7 @@ function markdownFor(data) {
   }
   lines.push('', '回傳模型、計費依據與限制：', '');
   for (const result of data.results) {
-    lines.push(`- ${result.label}: ${cell(result.model)} / ${cell(result.effort)}；回傳模型 ${cell(result.returnedModel || '未回傳')}，回傳檔位 ${cell(result.returnedEffort || '未回傳')}，service tier ${cell(result.serviceTier || '未回傳')}。${cell(result.cost.basis)} ${result.cost.notes.map(cell).join('；')}`);
+    lines.push(`- ${result.label}: ${cell(result.model)} / ${cell(result.effort)}；回傳模型 ${cell(result.returnedModel || '未回傳')}，回傳檔位 ${cell(result.returnedEffort || '未回傳')}，service tier ${cell(result.serviceTier || '未回傳')}。${result.responseMismatch ? '回傳設定與請求不一致，不能視為已確認使用請求模型及檔位。' : ''}${cell(result.cost.basis)} ${result.cost.notes.map(cell).join('；')}`);
   }
   lines.push('', '## 額外嘗試與重試紀錄', '',
     'results/ 保留每個配置最後的結果；attempts/ 保存被重試取代的額外呼叫。這裡的紀錄不是另一份用於品質比較的成功樣本；已知用量與費用會納入下方合計。', '');
@@ -287,6 +309,7 @@ function markdownFor(data) {
   lines.push('', '## 方法與限制', '');
   for (const note of data.methodNotes) lines.push(`- ${note}`);
   lines.push('', '本輪記錄的方法設定：', '', codeBlock(JSON.stringify(data.methodology, null, 2)));
+  if (data.configurationExtensions.length) lines.push('', '補測配置與原輪快照紀錄：', '', codeBlock(JSON.stringify(data.configurationExtensions, null, 2)));
   lines.push('', '## 價格來源與重現資料', '', `文件查核時間：${data.pricing.checkedAt ?? '未記錄'}`, '');
   for (const source of data.sources) lines.push(`- [${source.title.replaceAll(']', '\\]')}](${source.url})`);
   lines.push('', `來源 hash：${data.sourceHash}`, '', `Prompt hash：${data.promptHash}`, '',
@@ -317,7 +340,7 @@ function htmlFor(data, csv) {
 @media print{body{background:white}main{max-width:none;padding:0}.toolbar,.chooser,#download-csv{display:none}.reading,.translations{display:block}.original{position:static}.original,.translation{break-inside:avoid;margin:16px 0}.panel{border:0;padding:0}}
 </style></head><body><main>
 <header class="intro"><h1>Musicmap 翻譯模型對比報告</h1><p>先讀譯文，再揭曉模型。文字品質由你評判，這份報告沒有品質分數或排名。</p>
-<p class="muted">譯文為模型直接輸出的簡體中文，未經簡繁轉換或人工潤飾。英文片段是本次測試自寫的音樂領域評測文字，不是 Musicmap 原站引文。</p><p id="run-summary" class="muted"></p></header>
+<p class="muted">譯文為模型直接輸出的簡體中文，未經簡繁轉換或人工潤飾。英文片段是本次測試自寫的音樂領域評測文字，不是 Musicmap 原站引文。</p><p id="run-summary" class="muted"></p>${data.supplementationNote ? `<p id="supplementation-note" class="muted">${htmlEscape(data.supplementationNote)}</p>` : ''}</header>
 <section class="panel" aria-label="閱讀設定"><div class="toolbar"><label class="sample-control" for="passage">英文片段 <select id="passage"></select></label><label><input id="reveal" type="checkbox">揭曉模型與檔位</label><label><input id="metrics-toggle" type="checkbox">顯示 token 與費用</label></div>
 <fieldset class="chooser"><legend>選擇要並排閱讀的譯本</legend><div class="toolbar"><button id="select-all" type="button">全選</button><button id="select-none" type="button">清空</button><span class="muted">代號在同一輪測試中固定。</span></div><div id="choices" class="choices" style="margin-top:12px"></div></fieldset></section>
 <div id="announcer" aria-live="polite"></div><section class="reading" aria-label="原文與譯文"><article class="original"><h2 id="original-title"></h2><div id="original-text" class="copy english" lang="en"></div></article><div id="translations" class="translations"></div></section>
@@ -337,7 +360,7 @@ function htmlFor(data, csv) {
   const selected = new Set(data.results.slice(0, 2).map(result => result.id));
   const node = (tag, text, className) => { const element = document.createElement(tag); if (text != null) element.textContent = String(text); if (className) element.className = className; return element; };
   const labelFor = result => byId('reveal').checked ? result.label + ' · ' + result.model + ' / ' + result.effort : '譯本 ' + result.label;
-  const statusFor = result => result.status === 'pending' ? (result.sourceStatus === 'received' ? '已收到回應，待處理' : result.attemptRecorded ? '處理中' : '尚無結果') : ({ success: '完成', error: '失敗' })[result.status];
+  const statusFor = result => result.status === 'pending' ? (result.sourceStatus === 'received' ? '已收到回應，待處理' : result.attemptRecorded ? '處理中' : '尚無結果') : ({ success: result.responseMismatch ? '完成（回傳設定不符）' : '完成', error: '失敗' })[result.status];
   const num = value => value == null ? '—' : value.toLocaleString('en-US');
   const money = value => value.min == null || value.max == null ? '—' : value.min === value.max ? value.min.toFixed(6) : value.min.toFixed(6) + '–' + value.max.toFixed(6);
   const returnedEffort = result => result.returnedEffort || '未回傳，無法由回應確認';
@@ -361,11 +384,12 @@ function htmlFor(data, csv) {
     for (const result of data.results.filter(item => selected.has(item.id))) {
       const article = node('article', null, 'translation'); const header = node('header'); header.append(node('h3', labelFor(result)));
       if (byId('reveal').checked) header.append(node('div', '請求檔位：' + result.effort + '；回傳模型：' + (result.returnedModel || '未回傳') + '；回傳檔位：' + returnedEffort(result), 'badge'));
+      if (result.responseMismatch) header.append(node('p', '回傳設定與請求不一致；不能視為已確認使用請求模型及檔位。', 'error'));
       article.append(header);
       const translation = result.translations.find(item => item.id === passage.id);
       if (translation) { const copy = node('div', translation.text, 'copy chinese notranslate'); copy.lang = 'zh-Hans'; copy.translate = false; article.append(copy); }
       else article.append(node('p', result.status === 'pending' ? '尚未取得結果。' : '沒有這個片段的可用譯文。', 'muted'));
-      if (result.status === 'error') article.append(node('p', '請求或結果處理失敗：' + (result.error || '未提供錯誤細節'), 'error'));
+      if (result.status === 'error') article.append(node('p', result.failureNote || '請求或結果處理失敗：' + (result.error || '未提供錯誤細節'), 'error'));
       if (!translation && result.text) { const details = node('details'); details.append(node('summary', '檢視未解析的模型原始輸出'), node('pre', result.text)); article.append(details); }
       byId('translations').append(article);
     }
@@ -434,7 +458,7 @@ function htmlFor(data, csv) {
   for (const note of data.methodNotes) byId('method-notes').append(node('li', note));
   byId('pricing').textContent = JSON.stringify(data.pricing, null, 2);
   byId('methodology').textContent = JSON.stringify(data.methodology, null, 2);
-  byId('reproducibility').textContent = JSON.stringify({ run: data.id, createdAt: data.createdAt, promptHash: data.promptHash, sourceHash: data.sourceHash, pricingHash: data.pricingHash, glossaryHash: data.glossaryHash, provenance: data.provenance, executionProvenance: data.executionProvenance, methodology: data.methodology, configurations: data.configurations, attemptSummary: data.attemptSummary, extraAttempts: data.extraAttempts, files: ['manifest.json', 'results/', 'attempts/', 'anonymous-labels.json', 'metrics.csv', 'report.md', 'execution-provenance.json'] }, null, 2);
+  byId('reproducibility').textContent = JSON.stringify({ run: data.id, createdAt: data.createdAt, promptHash: data.promptHash, sourceHash: data.sourceHash, pricingHash: data.pricingHash, glossaryHash: data.glossaryHash, provenance: data.provenance, executionProvenance: data.executionProvenance, methodology: data.methodology, configurations: data.configurations, configurationExtensions: data.configurationExtensions, attemptSummary: data.attemptSummary, extraAttempts: data.extraAttempts, files: ['manifest.json', 'results/', 'attempts/', 'anonymous-labels.json', 'metrics.csv', 'report.md', 'execution-provenance.json'] }, null, 2);
   byId('system-prompt').textContent = data.systemPrompt;
   byId('user-prompt').textContent = data.prompt;
   renderChoices(); renderTranslations(); renderMetrics();
@@ -502,11 +526,15 @@ export async function generateReport(runDirectory) {
     additional: extraAttempts.length, successful: results.filter((result) => result.status === 'success').length,
     failed: attempts.filter((attempt) => attempt.status === 'error').length,
     unknownSpend: attempts.filter((attempt) => !attempt.rawUsagePresent || attempt.cost.usd.min == null || attempt.cost.usd.max == null).length };
+  const configurationExtensions = Array.isArray(manifest.configurationExtensions) ? manifest.configurationExtensions : [];
+  const supplementationNote = configurationExtensions.length
+    ? '本報告包含後續加入的補測配置，沿用原輪的英文片段、Prompt、術語表與價格，既有匿名代號保持不變。補測執行時間較晚，網路、服務負載與快取狀態未受控制。'
+    : '';
   const data = {
     id: String(manifest.id ?? path.basename(directory)), createdAt: String(manifest.createdAt ?? ''),
     sourceHash: String(manifest.sourceHash ?? ''), promptHash: String(manifest.promptHash ?? ''),
     pricingHash: String(manifest.pricingHash ?? ''), glossaryHash: String(manifest.glossaryHash ?? ''),
-    provenance: manifest.provenance ?? null, executionProvenance,
+    provenance: manifest.provenance ?? null, executionProvenance, configurationExtensions, supplementationNote,
     methodology: manifest.methodology ?? {}, systemPrompt: String(manifest.systemPrompt ?? ''), prompt: String(manifest.prompt ?? ''),
     configurations: manifest.configurations.map(({ id, provider, model, effort }) => ({ id, provider, model, effort })),
     passages: manifest.passages.map((passage) => ({ id: passage.id, title: String(passage.title ?? passage.id), text: passage.text })),

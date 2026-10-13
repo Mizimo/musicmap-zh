@@ -235,6 +235,62 @@ test('Codex does not infer actual metadata from the request and rejects missing 
     fetchImpl: async () => sseResponse({ status: 'completed' }) }), { code: 'USAGE_MISSING' });
 });
 
+test('Codex sends supplementary Astra efforts exactly and supports an extended timeout', async (t) => {
+  const fixture = await codexFixture(t);
+  for (const effort of ['xhigh', 'ultra', 'max']) {
+    let calls = 0;
+    const result = await codexRequest({ ...input, ...fixture, model: 'gpt-6-astra', effort, timeoutMs: 600000,
+      fetchImpl: async (_url, options) => {
+        calls++;
+        const body = JSON.parse(options.body);
+        assert.equal(body.model, 'gpt-6-astra');
+        assert.deepEqual(body.reasoning, { effort });
+        return sseResponse({ model: 'gpt-6-astra', reasoning: { effort }, status: 'completed',
+          usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } });
+      } });
+    assert.equal(calls, 1);
+    assert.equal(result.returnedEffort, effort);
+    assert.equal(result.status, 'completed');
+  }
+});
+
+test('Codex preserves a returned effort that differs from the requested effort', async (t) => {
+  const fixture = await codexFixture(t);
+  const result = await codexRequest({ ...input, ...fixture, model: 'gpt-6-astra', effort: 'ultra',
+    fetchImpl: async () => sseResponse({ model: 'gpt-6-astra', reasoning: { effort: 'max' }, status: 'completed',
+      usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } }) });
+  assert.equal(result.returnedEffort, 'max');
+});
+
+test('Codex rejects invalid timeouts before authentication or network access', async () => {
+  for (const timeoutMs of [0, -1, 600001, 1.5, '600000', null, NaN, Infinity]) {
+    await assert.rejects(codexRequest({ ...input, model: 'gpt-6-astra', effort: 'xhigh', timeoutMs,
+      authPath: '/not-a-real-auth-file', fetchImpl: () => assert.fail('No request with an invalid timeout') }),
+    { code: 'INVALID_CONFIGURATION' });
+  }
+});
+
+test('Codex classifies only precise structured effort rejections without retaining error text', async (t) => {
+  const fixture = await codexFixture(t);
+  const cases = [
+    [{ param: 'reasoning.effort', code: 'unsupported_value' }, 'REASONING_EFFORT_REJECTED'],
+    [{ param: 'reasoning.effort', code: 'invalid_value' }, 'REASONING_EFFORT_REJECTED'],
+    [{ param: 'model', code: 'unsupported_value' }, 'HTTP_ERROR'],
+    [{ param: 'reasoning.effort', code: 'invalid_request_error' }, 'HTTP_ERROR'],
+    [{ code: 'unsupported_value' }, 'HTTP_ERROR'],
+  ];
+  for (const [error, expected] of cases) {
+    let calls = 0;
+    await assert.rejects(codexRequest({ ...input, ...fixture, model: 'gpt-6-astra', effort: 'ultra',
+      fetchImpl: async () => {
+        calls++;
+        return Response.json({ error: { ...error, message: 'secret-upstream-error' } }, { status: 400 });
+      } }), (error) => error.code === expected && error.httpStatus === 400
+        && !JSON.stringify(error).includes('secret-upstream-error'));
+    assert.equal(calls, 1);
+  }
+});
+
 test('Codex auth and HTTP errors are sanitized and never refresh or retry', async (t) => {
   const expired = await codexFixture(t, { expired: true });
   await assert.rejects(codexRequest({ ...input, ...expired, model: 'gpt-6-astra',

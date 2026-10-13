@@ -5,11 +5,13 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {deepseekRequest,codexRequest} from '../lib/benchmark-transports.mjs';
 import {normalizeUsage,calculateCost,deepseekBand} from '../lib/benchmark-cost.mjs';
+import {extendManifest} from '../lib/benchmark-manifest.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const args=process.argv.slice(2);
 function option(name){const i=args.indexOf(name);if(i<0)return undefined;if(!args[i+1]||args[i+1].startsWith('--'))throw new Error(`Missing ${name} value`);return args[i+1];}
-const allowed=new Set(['--execute','--run-dir','--only','--deepseek-band']);
-for(let i=0;i<args.length;i++){if(!allowed.has(args[i]))throw new Error('Unknown argument');if(args[i]!=='--execute')i++;}
+const switches=new Set(['--execute','--append-configurations']);
+const allowed=new Set([...switches,'--run-dir','--only','--deepseek-band']);
+for(let i=0;i<args.length;i++){if(!allowed.has(args[i]))throw new Error('Unknown argument');if(!switches.has(args[i]))i++;}
 const samples=JSON.parse(await readFile(path.join(root,'benchmarks/samples.json'),'utf8'));
 const pricing=JSON.parse(await readFile(path.join(root,'benchmarks/pricing.json'),'utf8'));
 const terms=JSON.parse(await readFile(path.join(root,'data/terminology.json'),'utf8'));
@@ -20,11 +22,12 @@ const prompt=JSON.stringify({glossary,passages:samples.passages.map(({id,text})=
 const hash=x=>createHash('sha256').update(x).digest('hex');
 const configurations=[
   ...['deepseek-flash','deepseek-v4-pro'].flatMap(model=>['low','high','max'].map(effort=>({id:`${model}-${effort}`,provider:'deepseek',model,effort}))),
-  ...['gpt-6.1-sol','gpt-6-astra','gpt-6-sol'].flatMap(model=>['low','medium','high'].map(effort=>({id:`${model}-${effort}`,provider:'codex',model,effort})))
+  ...['gpt-6.1-sol','gpt-6-astra','gpt-6-sol'].flatMap(model=>['low','medium','high'].map(effort=>({id:`${model}-${effort}`,provider:'codex',model,effort}))),
+  ...['xhigh','ultra','max'].map(effort=>({id:`gpt-6-astra-${effort}`,provider:'codex',model:'gpt-6-astra',effort}))
 ];
-const only=option('--only');
-if(only&&!configurations.some(c=>c.id===only))throw new Error('Unknown configuration');
-const selected=configurations.filter(c=>!only||c.id===only);
+const only=option('--only')?.split(',');
+if(only&&only.some(id=>!configurations.some(c=>c.id===id)))throw new Error('Unknown configuration');
+const selected=configurations.filter(c=>!only||only.includes(c.id));
 const bandOverride=option('--deepseek-band');
 if(selected.some(c=>c.provider==='deepseek'))deepseekBand(new Date().toISOString(),pricing,bandOverride);
 const runDir=path.resolve(option('--run-dir')||path.join(root,'artifacts/translation-benchmark',new Date().toISOString().replace(/[:.]/g,'-')));
@@ -38,7 +41,14 @@ try{
   const manifestPath=path.join(runDir,'manifest.json');
   let previous;
   try{previous=JSON.parse(await readFile(manifestPath,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
-  if(previous){for(const key of ['promptHash','sourceHash','pricingHash','glossaryHash','bandOverride'])if(previous[key]!==manifest[key])throw new Error(`Refusing resume with changed ${key}`);}
+  if(previous){
+    const extension=extendManifest(previous,manifest,selected,{allowAppend:args.includes('--append-configurations')});
+    if(extension.changed){
+      await mkdir(path.join(runDir,'manifest-history'),{recursive:true});
+      await writeFile(path.join(runDir,extension.previousFile),extension.previousText,{mode:0o600,flag:'wx'});
+      await atomic(manifestPath,extension.manifest);
+    }
+  }
   else await atomic(manifestPath,manifest);
   // One queue per provider limits each provider to one in-flight request.
   await Promise.all(['deepseek','codex'].map(async provider=>{

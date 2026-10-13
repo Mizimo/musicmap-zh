@@ -126,6 +126,8 @@ npm run test:browser
 
 使用者已授權本次（2026-10-13）15 組片段對比：DeepSeek V4.1 Flash／V4 Pro 各 low、high、max，Codex GPT-6.1 Sol／GPT-6 Astra／GPT-6 Sol 各 low、medium、high。這不授權全站付費翻譯或無限重試。一般 `npm test` 仍只用 mock。
 
+同日使用者追加 Astra `xhigh`、`ultra`、`max` 三組補測，使用原四段、原提示、原術語與原計價快照。只執行這三個新配置，不能重跑前 15 組。官方 Astra 文件列有 xhigh/max，未列 ultra；請求與回傳檔位必須分別記錄，不能把拒絕或不同回傳值包裝成成功使用 ultra。`--only` 支援逗號分隔配置；`--append-configurations` 才允許既有 run 追加配置，並在 `manifest-history/` 保存舊 manifest。報告須保留原有 A–O 匿名標籤，新增 P–R。
+
 `benchmarks/samples.json` 是自編的音樂翻譯測試文字，**不是 Musicmap 原文**。所有配置共用同一提示、術語表與英文片段；直接產生簡體，不經人工修改或 OpenCC。文字品質完全交由使用者判斷，不要產生品質分數或排名。
 
 ```bash
@@ -137,7 +139,7 @@ npm run benchmark:report -- artifacts/translation-benchmark/my-run
 
 執行器保存 prompt／source／pricing／glossary hash 與各組原始 usage。續跑會跳過所有已有嘗試，包括未完成／失敗，避免不明狀態下重複扣量。先檢查結果，必要的有限重試依現有授權範圍處理；原嘗試移至同一 run 的 `attempts/` 留存，不可刪除。報告會列出額外嘗試，合計已知用量及費用，未回傳用量的失敗保留為未知。沒有 quality evaluator，也沒有自動挑選最佳譯文。
 
-2026-10-13 對比已完成：15 組配置、60 段譯文，共 16 次請求。Pro Max 首次未回傳有效 usage，第二次成功；不要將首次未知消耗算成零。本機產物在 `artifacts/translation-benchmark/2026-10-13-comparison/`，換機時另行移交整包，不能從 Git 推定本機產物存在。全部實測 DeepSeek 都是非串流；後加的可選串流 transport 只做 mock 驗證，沒有用來產生本次譯文。`execution-provenance.json` 保存實際執行程式版本與 hash。
+2026-10-13 原輪與補測均已完成：18 個請求配置，其中17組成功，共68段譯文、19次請求。Astra Xhigh／Max 補測成功，Ultra 因 HTTP 400 檔位參數拒絕，沒有譯文或用量；不要替換檔位或重新嘗試。完整結果摘要見 [benchmarks/RESULTS-2026-10-13.md](benchmarks/RESULTS-2026-10-13.md)。Pro Max 首次未回傳有效 usage，第二次成功；不要將首次未知消耗算成零。本機產物在 `artifacts/translation-benchmark/2026-10-13-comparison/`，換機時另行移交整包，不能從 Git 推定本機產物存在。全部實測 DeepSeek 都是非串流；後加的可選串流 transport 只做 mock 驗證，沒有用來產生本次譯文。`execution-provenance.json` 保存原輪實際執行程式版本與 hash；`astra-supplement-provenance.json` 保存補測的獨立程式 hash、回傳結果與設定，`manifest-history/` 保存追加前的 manifest。
 
 DeepSeek 從 `.env` 讀金鑰；Codex 從目前機器的 `~/.codex/auth.json` 讀已登入憑證（可用 `CODEX_AUTH_PATH` 指定），不把憑證保存進結果。Codex transport 使用本機 pi-ai adapter，可由 `MUSICMAP_CODEX_ADAPTER` 指定模組位置；更換機器後先確認相容版本與登入狀態。不得將 auth 檔案、金鑰、帳號資訊或完整 HTTP headers 加入報告。
 
