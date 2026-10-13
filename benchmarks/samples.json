@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "provenance": "Original evaluation passages authored for this project. They are not quotations from Musicmap and are not additions to its source corpus.",
+  "passages": [
+    {
+      "id": "taxonomy",
+      "title": "分類層級與關係限定",
+      "text": "A genre map is a guide to relationships, not a family tree with a single parent for every branch. Rock, Jazz, and Electronic Music can serve as broad families, while a label such as Post-Punk may describe both a historical scene and a set of musical approaches. An arrow indicating influence does not necessarily mean that one genre developed directly out of another. Nor does placing two styles close together imply that listeners, musicians, or critics agree on their boundaries. Read the categories as useful starting points rather than fixed definitions."
+    },
+    {
+      "id": "rhythm",
+      "title": "節奏、製作與同詞異義",
+      "text": "In this imagined recording, the bass enters slightly behind the beat while the snare maintains a firm backbeat. The resulting groove feels relaxed without becoming slower. A producer then samples a short drum break, chops it into uneven slices, and leaves a little room sound around each hit. Here, a break is a passage in the arrangement; Breakbeat is the name of a broader rhythmic approach and, in some contexts, a genre label. Translating both with the same unexplained word would blur a distinction that the description needs to preserve."
+    },
+    {
+      "id": "terminology",
+      "title": "地區譯名與流派名稱",
+      "text": "Consider a playlist that moves from Blues to Rhythm and Blues, then through Soul and Funk before arriving at Hip-Hop. These names overlap in everyday discussion, but they should not be treated as interchangeable. Rap identifies a vocal practice as well as a musical category; Hip-Hop can refer to a wider culture. Likewise, Grunge and Post-Grunge are related labels rather than two spellings of the same style. A Chinese edition should use consistent preferred terms while retaining the English names where readers need to recognize a broad category or resolve an unfamiliar translation."
+    },
+    {
+      "id": "style",
+      "title": "音色描寫與語氣保留",
+      "text": "The fictional duo Paper Harbour describes its 1994 demo, Rooms Without Windows, as \"dance music for an empty room.\" A dry kick drum repeats beneath a hazy wash of guitar, and the melody seems to surface only when the listener stops looking for it. The description suggests an affinity with Ambient and Shoegaze, but it does not establish either label as the duo's chosen identity. Keep that uncertainty intact: a critic's comparison is not an artist's declaration, and an evocative metaphor should not become a technical claim about how the recording was made."
+    }
+  ]
+}

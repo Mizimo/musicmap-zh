@@ -77,6 +77,8 @@ npm start
 
 繁體預設採 `zh-TW` 的專案用詞偏好，表中的譯名不是所有地區或音樂社群的唯一標準。正式使用前需審閱術語表與代表性段落；有歧義時保留英文辨識，不要只靠字形轉換推定流派含義。
 
+流派家族、地圖高層標籤與術語表會在中文旁附上可見的原英文，方便辨識分類與地區用詞差異；切回英文會完整還原。
+
 修改繁體術語後，重新 `npm run convert` 即可產生繁體，不必重跑付費翻譯。修改簡體術語不會自動改寫已完成、已審閱的簡體譯文；應先找出受影響文字，針對性審閱或規劃重置，再更新對應分片／語言檔與繁體。不要清空所有快取或盲目重跑全站付費任務。
 
 `scripts/convert.mjs` 會寫出 `generated/locales/zh-Hant.json` 和 `generated/conversion-status.json`。狀態包含 `sourceHash`、`simplifiedHash`、`traditionalHash`、`terminologyHash`；建置以這些資料檢查輸入與產物一致，防止簡體或術語改了卻繼續使用舊繁體。繁體檔是可重建產物，長期修訂優先寫入術語表或簡體來源，再重新轉換。
@@ -100,7 +102,15 @@ npm start
 
 來源更新時由協調機執行 `npm run sync -- --force`，重新凍結快照、術語版本與分派工作。舊來源的分片不可直接混入新一輪；符合相同翻譯設定的未變動原文快取可復用。初始快照含 268 筆流派資料、7,801 個文字片段，約 51.6 萬英文來源字元，只需安排簡體翻譯；這不是 token 數或收費估價。
 
-## 驗證
+## 片段翻譯對比
+
+`npm run benchmark` 只預覽配置；`npm run benchmark -- --execute --run-dir artifacts/translation-benchmark/my-run` 才會呼叫模型並消耗用量。共 15 組：DeepSeek V4.1 Flash、V4 Pro 各 low/high/max；Codex GPT-6.1 Sol、GPT-6 Astra、GPT-6 Sol 各 low/medium/high。Codex 使用本機已有的 OAuth 登入與 pi-ai adapter；詳見 [AGENTS.md](AGENTS.md)。
+
+每組翻譯同樣四段自編音樂領域英文，並保留原始簡體輸出，不是 Musicmap 原文，也不直接加入網站語料。執行 `npm run benchmark:report -- artifacts/translation-benchmark/my-run` 產生離線匿名比較頁、完整文字報告與用量 CSV。品質由使用者判斷，工具不評分、不排名。
+
+用量包含輸入、輸出、快取與 API 有回報的推理 token。[計價文件](benchmarks/PRICING.md) 列出官方價格、來源與公式；Codex 金額只表示 API 等價，不表示訂閱帳單扣款。未回報的計費欄位保留為未知或費用上下界。之後重跑需重新核對當日價格及 DeepSeek 尖離峰。
+
+## 程式驗證
 
 ```bash
 npm test

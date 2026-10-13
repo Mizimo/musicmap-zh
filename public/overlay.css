@@ -1,5 +1,20 @@
 html[data-mmzh-language]:not([data-mmzh-language="en"]) body { font-family: "Noto Sans CJK TC", "Noto Sans CJK SC", "Microsoft JhengHei", sans-serif; }
 html[data-mmzh-language]:not([data-mmzh-language="en"]) #musicmap text { font-family: "Noto Sans CJK TC", "Noto Sans CJK SC", sans-serif !important; }
 html[data-mmzh-language]:not([data-mmzh-language="en"]) .description-container { line-height: 1.9; }
+.mmzh-original-term { font-family: "Liberation Sans", Arial, sans-serif; font-size: .72em; font-weight: 400; letter-spacing: 0; line-height: 1.35; }
+small.mmzh-original-term { display: inline-block; margin-inline-start: .5em; }
+#supergenres-list small.mmzh-original-term,
+#supergenre-side-pane-genre-name small.mmzh-original-term,
+#right-side-pane-supergenre-first-tag small.mmzh-original-term,
+#right-side-pane-supergenre-second-tag small.mmzh-original-term { display: block; margin: 2px 0 4px; }
+#supergenres-list small.mmzh-original-term { margin-left: 23px; }
+#supergenre-side-pane-genre-name small.mmzh-original-term { font-size: .46em; line-height: 1.35; }
+#supergenres-side-pane .small-side-pane-title small.mmzh-original-term { display: block; margin: 5px 0 0; font-size: .4em; }
+html[data-mmzh-language] #musicmap text.mmzh-map-original { font-family: "Liberation Sans", Arial, sans-serif !important; font-weight: 400; pointer-events: none; opacity: .85; }
 #mmzh-root { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 2147483000; }
-@media (max-width: 620px) { #mmzh-root { bottom: 26px; width: calc(100% - 24px); } }
+@media (max-width: 620px) {
+  #mmzh-root { bottom: 26px; width: calc(100% - 24px); }
+  #supergenres-side-pane { width: calc(100vw - 50px); }
+  #supergenres-side-pane .small-side-pane-content { padding-inline: 22px; }
+  #supergenres-side-pane .small-side-pane-title { font-size: 32px; }
+}

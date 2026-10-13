@@ -1,0 +1,36 @@
+{
+  "checkedAt": "2026-10-13",
+  "unit": "per million tokens",
+  "sources": [
+    {"title":"DeepSeek USD pricing and time bands","url":"https://api-docs.deepseek.com/quick_start/pricing"},
+    {"title":"DeepSeek CNY pricing","url":"https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"},
+    {"title":"DeepSeek thinking mode","url":"https://api-docs.deepseek.com/guides/thinking_mode/"},
+    {"title":"GPT-6.1 Sol standard pricing","url":"https://developers.openai.com/api/docs/models/gpt-6.1-sol"},
+    {"title":"GPT-6 Astra standard pricing","url":"https://developers.openai.com/api/docs/models/gpt-6-astra"},
+    {"title":"GPT-6 Sol standard pricing","url":"https://developers.openai.com/api/docs/models/gpt-6-sol"},
+    {"title":"OpenAI cache write accounting","url":"https://developers.openai.com/api/docs/guides/prompt-caching"},
+    {"title":"OpenAI reasoning token accounting","url":"https://developers.openai.com/api/docs/guides/reasoning"}
+  ],
+  "deepseekSchedule": {
+    "timezone":"UTC",
+    "peakWeekdays":[1,2,3,4,5],
+    "peakHours":[[1,4],[6,10]],
+    "excludes":"PRC public holidays; future reruns must explicitly select peak or offpeak after checking the calendar.",
+    "verifiedNonHolidayDates":["2026-10-13"]
+  },
+  "models": {
+    "deepseek-flash": {
+      "label":"DeepSeek V4.1 Flash",
+      "usd":{"peak":{"input":0.30,"cacheRead":0.006,"output":1.20},"offpeak":{"input":0.15,"cacheRead":0.003,"output":0.60}},
+      "cny":{"peak":{"input":2,"cacheRead":0.04,"output":8},"offpeak":{"input":1,"cacheRead":0.02,"output":4}}
+    },
+    "deepseek-v4-pro": {
+      "label":"DeepSeek V4 Pro",
+      "usd":{"peak":{"input":1.32,"cacheRead":0.044,"output":3.96},"offpeak":{"input":0.66,"cacheRead":0.022,"output":1.98}},
+      "cny":{"peak":{"input":9,"cacheRead":0.30,"output":27},"offpeak":{"input":4.5,"cacheRead":0.15,"output":13.5}}
+    },
+    "gpt-6.1-sol":{"label":"Codex GPT-6.1 Sol","usd":{"input":2,"cacheRead":0.10,"cacheWrite":2.50,"output":10}},
+    "gpt-6-astra":{"label":"Codex GPT-6 Astra","usd":{"input":10,"cacheRead":1,"cacheWrite":12.50,"output":50}},
+    "gpt-6-sol":{"label":"Codex GPT-6 Sol","usd":{"input":2,"cacheRead":0.20,"cacheWrite":2.50,"output":10}}
+  }
+}

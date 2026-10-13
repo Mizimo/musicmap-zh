@@ -16,6 +16,8 @@
     "build": "node scripts/build.mjs",
     "snapshot": "node scripts/snapshot.mjs",
     "merge": "node scripts/merge-translations.mjs",
+    "benchmark": "node --env-file-if-exists=.env scripts/benchmark.mjs",
+    "benchmark:report": "node scripts/benchmark-report.mjs",
     "test": "node --test test/*.test.mjs",
     "test:browser": "node test/browser.mjs"
   },

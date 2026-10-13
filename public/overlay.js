@@ -8,6 +8,16 @@ const records = new Map();
 const attributes = new Map();
 const translated = new Map();
 const originalWidths = new WeakMap();
+const originalBounds = new WeakMap();
+const englishNotes = new Map();
+const annotationSelector = [
+  '#supergenre-titles .main-titles > text', '#supergenre-titles .otherworld-titles > text',
+  '#bottom-link-bar-supergenres > text', '#bottom-link-bar-clusters > text',
+  '#supergenres-list a[data-code]', '#supergenres-side-pane .small-side-pane-title',
+  '#supergenre-side-pane-genre-name',
+  '#right-side-pane-supergenre-first-tag', '#right-side-pane-supergenre-second-tag',
+  '#glossary-list > li > span', '#genre-prefixes-list > li > span',
+].join(',');
 let language = 'zh-Hant';
 try { language = localStorage.getItem('mmzh-language') || language; } catch {}
 if (!['en', 'zh-Hans', 'zh-Hant'].includes(language)) language = 'zh-Hant';
@@ -47,7 +57,7 @@ function renderUI() {
   $('#help-title').textContent = copy('关于中文阅读版', '關於中文閱讀版', 'About this reader');
   $('#help-copy').innerHTML = '';
   for (const text of [
-    copy('地图保留原站互动。中文名称可用搜索查找，切换 EN 可随时查看原文。', '地圖保留原站互動。中文名稱可用搜尋查找，切換 EN 可隨時查看原文。', 'The original map remains interactive. Search Chinese genre names, or switch to EN for the original.'),
+    copy('地图保留原站互动。流派家族与术语表在中文旁附有英文原名；中文名称可用搜索查找，切换 EN 可随时查看原文。', '地圖保留原站互動。流派家族與術語表在中文旁附有英文原名；中文名稱可用搜尋查找，切換 EN 可隨時查看原文。', 'The original map remains interactive. Chinese family labels and glossary entries include the original English. Search Chinese genre names, or switch to EN for the original.'),
     copy('译文已预先生成并随页面提供。浏览和切换语言不会调用 DeepSeek，也不会产生翻译费用。', '譯文已預先產生並隨頁面提供。瀏覽和切換語言不會呼叫 DeepSeek，也不會產生翻譯費用。', 'Translations are built in advance and included with the site. Browsing and switching languages never call DeepSeek.'),
     copy('机器译文仅供参考。歌曲和音乐人保留原名；播放音乐需要联网。地图与原始内容属于 Musicmap。', '機器譯文僅供參考。歌曲和音樂人保留原名；播放音樂需要連網。地圖與原始內容屬於 Musicmap。', 'Machine translations may need review. Artist and song names remain original; playback requires internet. Original map and content belong to Musicmap.'),
   ]) { const p = document.createElement('p'); p.textContent = text; $('#help-copy').append(p); }
@@ -91,7 +101,7 @@ function fitMapText(element) {
 
 function eligible(node) {
   const p = node.parentElement;
-  return p && !p.closest('#mmzh-root,script,style,noscript,iframe,textarea,#right-side-pane-songlist,.song-title,#people-list') && /[a-zA-Z]{2}/.test(node.textContent) && node.textContent.trim().length > 1;
+  return p && !p.closest('#mmzh-root,[data-mmzh-original],script,style,noscript,iframe,textarea,#right-side-pane-songlist,.song-title,#people-list') && /[a-zA-Z]{2}/.test(node.textContent) && node.textContent.trim().length > 1;
 }
 
 function collect() {
@@ -108,16 +118,81 @@ function collect() {
     if (mapText && !originalWidths.has(mapText)) {
       const spans = [...mapText.querySelectorAll('tspan')];
       originalWidths.set(mapText, (spans.length ? spans : [mapText]).map(item => [item, item.getComputedTextLength(), item.getAttribute('textLength'), item.getAttribute('lengthAdjust')]));
+      const box = mapText.getBBox();
+      originalBounds.set(mapText, { x: box.x, y: box.y, width: box.width });
       mapText.setAttribute('aria-label', mapText.textContent.trim());
     }
   }
   for (const element of document.querySelectorAll('[title],[placeholder],[aria-label],[data-bs-original-title],[data-bs-content],[data-live-search-placeholder]')) {
-    if (element.closest('#mmzh-root')) continue;
+    if (element.closest('#mmzh-root,[data-mmzh-original]')) continue;
     let record = attributes.get(element);
     if (!record) { record = {}; attributes.set(element, record); }
     for (const name of ['title', 'placeholder', 'aria-label', 'data-bs-original-title', 'data-bs-content', 'data-live-search-placeholder']) {
       const value = element.getAttribute(name);
       if (value && (!record[name] || value !== record[name].applied)) record[name] = { original: value, applied: value };
+    }
+  }
+}
+
+function labelText(element) {
+  const original = [], current = [];
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (node.parentElement.closest('[data-mmzh-original]')) continue;
+    original.push(records.get(node)?.original ?? node.nodeValue);
+    current.push(node.nodeValue);
+  }
+  // SVG labels can span several positioned tspans without whitespace between them.
+  return { original: sourceKey(original.join(' ')), current: sourceKey(current.join(' ')) };
+}
+
+function annotateEnglish() {
+  for (const [element, note] of englishNotes) {
+    if (language === 'en' || !element.isConnected || !note.isConnected) {
+      note.remove(); englishNotes.delete(element);
+    }
+  }
+  if (language === 'en') return;
+  for (const element of document.querySelectorAll(annotationSelector)) {
+    if (element.hasAttribute('data-mmzh-original')) continue;
+    const { original, current } = labelText(element);
+    // An incomplete preview keeps the untranslated original once. A translation
+    // that already retains the complete English label needs no second copy.
+    if (!/\p{Script=Han}/u.test(current) || !/[a-zA-Z]{2}/.test(original) || normalize(current).includes(normalize(original))) {
+      englishNotes.get(element)?.remove(); englishNotes.delete(element); continue;
+    }
+    const isMap = element.namespaceURI === 'http://www.w3.org/2000/svg';
+    let note = englishNotes.get(element);
+    if (!note) {
+      note = isMap ? document.createElementNS(element.namespaceURI, 'text') : document.createElement('small');
+      note.setAttribute('data-mmzh-original', '');
+      note.setAttribute('lang', 'en');
+      note.classList.add('mmzh-original-term');
+      if (isMap) {
+        note.classList.add('mmzh-map-original');
+        // A separate text element leaves every source tspan, coordinate and
+        // width-fitting target intact. The compact English line sits above the
+        // Chinese label, clear of the source's subtitles immediately below it.
+        const box = originalBounds.get(element);
+        if (!box) continue;
+        const size = parseFloat(getComputedStyle(element).fontSize);
+        note.setAttribute('transform', element.getAttribute('transform') || '');
+        note.setAttribute('x', box.x);
+        note.setAttribute('y', box.y - size * 0.12);
+        note.style.fontSize = `${size * 0.42}px`;
+        element.after(note);
+      } else element.append(note);
+      englishNotes.set(element, note);
+    }
+    note.textContent = original;
+    if (isMap) {
+      const width = originalBounds.get(element).width;
+      note.removeAttribute('textLength');
+      if (width > 0 && note.getComputedTextLength() > width) {
+        note.setAttribute('textLength', width);
+        note.setAttribute('lengthAdjust', 'spacingAndGlyphs');
+      }
     }
   }
 }
@@ -140,6 +215,7 @@ function apply() {
     }
   }
   mapTexts.forEach(fitMapText);
+  annotateEnglish();
 }
 
 function scan() {
