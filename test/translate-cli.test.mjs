@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeBatches, parseArguments, runTranslation } from '../scripts/translate.mjs';
@@ -11,6 +11,9 @@ async function fixture(t, texts) {
   t.after(() => rm(rootDir, { recursive: true, force: true }));
   await mkdir(join(rootDir, '.cache/source'), { recursive: true });
   await writeFile(join(rootDir, '.cache/source/strings.json'), JSON.stringify(texts));
+  await mkdir(join(rootDir, 'generated/site'), { recursive: true });
+  await writeFile(join(rootDir, 'generated/site/index.html'), '');
+  await writeFile(join(rootDir, 'generated/site/master-genrelist.json'), '{}');
   return rootDir;
 }
 
@@ -104,7 +107,8 @@ test('an interrupted later batch preserves earlier exports for the next run', as
   assert.deepEqual(status.languages['zh-Hans'], { translated: 20, total: 25, complete: false });
   assert.equal(Object.keys(await readJson(rootDir, 'generated/locales/zh-Hans.json')).length, 20);
   const seen = [];
-  const result = await runTranslation({ rootDir, languages: ['zh-Hans'], apiKey: 'test', fetchImpl: fakeApi(seen), log: () => {} });
+  await assert.rejects(runTranslation({ rootDir, languages: ['zh-Hans'], apiKey: 'test', fetchImpl: fakeApi(seen), log: () => {} }), /require review/);
+  const result = await runTranslation({ rootDir, languages: ['zh-Hans'], apiKey: 'test', retryFailed: true, fetchImpl: fakeApi(seen), log: () => {} });
   assert.deepEqual(seen, [{ texts: texts.slice(20), language: 'zh-Hans' }]);
   assert.equal(result.status.languages['zh-Hans'].complete, true);
   assert.equal(result.status.languages['zh-Hant'].complete, false);
@@ -185,4 +189,51 @@ test('exact normalized terminology aliases precede dictionary defaults without r
   await writeFile(join(rootDir, 'generated/locales/zh-Hans.json'), JSON.stringify({ TECHNO: '既有人工核准术语', '  rhythm & blues\n': '既有节奏布鲁斯', 'An already translated paragraph.': '已有译文。' }));
   await runTranslation(settings);
   assert.equal((await readJson(rootDir, 'generated/locales/zh-Hans.json')).TECHNO, '既有人工核准术语');
+});
+
+test('production CLI uses the dedicated key, explicit max effort, reference context, and recoverable paid output', async t => {
+  const text = 'A genre grew from';
+  const rootDir = await fixture(t, [text]);
+  await writeFile(join(rootDir, 'generated/site/index.html'), `<p>${text} <a>older forms</a> in 1975.</p>`);
+  const apiKeyFile = join(rootDir, 'dedicated-key');
+  await writeFile(apiKeyFile, 'sk-dedicated-test\n');
+  let calls = 0;
+  const settings = { rootDir, apiKey: 'sk-old-test', apiKeyFile, log: () => {}, fetchImpl: async (url, options) => {
+    calls++;
+    assert.equal(options.headers.Authorization, 'Bearer sk-dedicated-test');
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, 'deepseek-v4-pro');
+    assert.deepEqual(body.thinking, { type: 'enabled' });
+    assert.equal(body.reasoning_effort, 'max');
+    assert.equal(body.max_tokens, 32768);
+    assert.match(JSON.parse(body.messages[1].content).contexts[0], /older forms.*1975/);
+    return fakeApi()(url, options);
+  } };
+  await runTranslation(settings);
+  assert.equal(calls, 1);
+  const files = await readdir(join(rootDir, 'generated/translation-requests/zh-Hans'));
+  const record = await readJson(rootDir, `generated/translation-requests/zh-Hans/${files[0]}`);
+  assert.equal(record.type, 'completed');
+  assert.equal(record.rawUsage, null);
+  assert.equal(record.cost, null);
+  assert.ok(!JSON.stringify(record).includes('sk-dedicated-test'));
+  await rm(join(rootDir, '.cache/translations'), { recursive: true });
+  await rm(join(rootDir, 'generated/locales/zh-Hans.json'));
+  const recovered = await runTranslation({ ...settings, apiKey: '', apiKeyFile: undefined, fetchImpl: () => assert.fail('Recovered paid output must not be purchased again') });
+  assert.equal(recovered.processed, 1);
+  assert.equal(recovered.status.languages['zh-Hans'].complete, true);
+});
+
+test('graceful stop saves the active batch without purchasing the next batch', async t => {
+  const texts = Array.from({ length: 25 }, (_, index) => `Stop-safe paragraph ${index}.`);
+  const rootDir = await fixture(t, texts);
+  let stopping = false;
+  let calls = 0;
+  const result = await runTranslation({ rootDir, apiKey: 'test', log: () => {}, shouldStop: () => stopping,
+    fetchImpl: async (...args) => { calls++; stopping = true; return fakeApi()(...args); } });
+  assert.equal(calls, 1);
+  assert.equal(result.processed, 20);
+  assert.equal(result.interrupted, true);
+  assert.equal(result.status.languages['zh-Hans'].complete, false);
+  assert.equal(Object.keys(await readJson(rootDir, 'generated/locales/zh-Hans.json')).length, 20);
 });

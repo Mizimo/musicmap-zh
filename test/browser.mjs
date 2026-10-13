@@ -102,6 +102,9 @@ try {
     locale['Fixture prose after a link.'] = lang === 'zh-Hans' ? '链接后的测试文字。' : '連結後的測試文字。';
     locale.fusion = '融合';
     locale.arpeggio = '琶音（arpeggio）';
+    // This fixture deliberately exercises untranslated-label behavior even when
+    // the production locale is complete.
+    delete locale['blue notes'];
     await page.route(`**/_zh/locales/${lang}.json`, route => route.fulfill({ json: locale }));
   }
   await ready(page);

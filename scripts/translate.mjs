@@ -3,9 +3,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createTranslator } from '../lib/translator.mjs';
+import { createTranslator, TRANSLATION_PROMPT_TEMPLATE_HASH } from '../lib/translator.mjs';
+import { loadTranslationContexts } from '../lib/translation-context.mjs';
+import { acquireTranslationLock, createTranslationJournal, readTranslationKey } from '../lib/translation-journal.mjs';
 import { dictionary } from '../public/dictionary.js';
-import { TERMINOLOGY } from '../lib/terminology.mjs';
+import { TERMINOLOGY, TERMINOLOGY_HASH } from '../lib/terminology.mjs';
 
 export const LANGUAGES = ['zh-Hans', 'zh-Hant'];
 export const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -155,15 +157,30 @@ export function makeBatches(texts, { maxTexts = 20, maxCharacters = 14_000 } = {
   return batches;
 }
 
-export async function runTranslation({
+export async function runTranslation(options = {}) {
+  if (options.dryRun) return performTranslation(options);
+  const shard = options.shard === undefined ? null : validateShard(options.shard);
+  const scope = shard ? `zh-Hans-${shard.index}-of-${shard.count}` : 'zh-Hans';
+  const release = await acquireTranslationLock(options.rootDir ?? PROJECT_ROOT, scope);
+  try { return await performTranslation(options); }
+  finally { await release(); }
+}
+
+async function performTranslation({
   rootDir = PROJECT_ROOT,
   languages = ['zh-Hans'],
   limit = Infinity,
   dryRun = false,
   shard: requestedShard,
   apiKey = process.env.DEEPSEEK_API_KEY,
+  apiKeyFile = process.env.DEEPSEEK_API_KEY_FILE,
   baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
-  model = process.env.DEEPSEEK_MODEL || 'deepseek-flash',
+  model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro',
+  reasoningEffort = process.env.DEEPSEEK_REASONING_EFFORT || 'max',
+  maxTokens = Number(process.env.DEEPSEEK_MAX_TOKENS || 32768),
+  timeoutMs = Number(process.env.DEEPSEEK_TIMEOUT_MS || 600000),
+  retryFailed = false,
+  shouldStop = () => false,
   fetchImpl = globalThis.fetch,
   log = console.log,
 } = {}) {
@@ -217,6 +234,17 @@ export async function runTranslation({
     return { dryRun: true, estimates, status: currentStatus(), processed: 0 };
   }
 
+  const contexts = await loadTranslationContexts({ rootDir, source: entireSource });
+  const scope = shard ? `zh-Hans-${shard.index}-of-${shard.count}` : 'zh-Hans';
+  const journal = await createTranslationJournal({ rootDir, scope, source, retryFailed, identity: {
+    sourceHash, model, reasoningEffort, maxTokens, baseUrl,
+    promptTemplateHash: TRANSLATION_PROMPT_TEMPLATE_HASH, terminologyHash: TERMINOLOGY_HASH,
+    contextsHash: createHash('sha256').update(JSON.stringify([...contexts])).digest('hex'),
+  } });
+  for (const [text, translation] of Object.entries(journal.recovered)) {
+    if (Object.hasOwn(localeValues['zh-Hans'], text) && localeValues['zh-Hans'][text] !== translation) throw new Error('Completed translation differs from request journal; review before resuming.');
+  }
+
   const statusPath = join(rootDir, 'generated/translation-status.json');
   async function saveLocale(language) {
     await atomicJson(localePaths[language], shard
@@ -227,9 +255,10 @@ export async function runTranslation({
   for (const language of selected) await saveLocale(language);
   if (!shard) await atomicJson(statusPath, currentStatus());
   const translator = createTranslator({
-    apiKey,
+    apiKey: await readTranslationKey({ apiKey, apiKeyFile }),
     baseUrl,
     model,
+    reasoningEffort, maxTokens, timeoutMs, onRequest: journal.record,
     cacheDir: join(rootDir, '.cache/translations'),
     fetchImpl,
   });
@@ -239,21 +268,24 @@ export async function runTranslation({
     const missing = source.filter((text) => !Object.hasOwn(locale, text));
     const remaining = limit === Infinity ? missing : missing.slice(0, Math.max(0, limit - processed));
     for (const texts of makeBatches(remaining)) {
-      const result = await translator.translate({ texts, language });
-      for (let index = 0; index < texts.length; index += 1) locale[texts[index]] = result.translations[index];
+      if (shouldStop()) break;
+      const pending = texts.filter(text => !Object.hasOwn(journal.recovered, text));
+      const result = await translator.translate({ texts: pending, language, contexts: pending.map(text => contexts.get(text) ?? '') });
+      const translations = new Map(pending.map((text, index) => [text, result.translations[index]]));
+      for (const text of texts) locale[text] = journal.recovered[text] ?? translations.get(text);
       processed += texts.length;
       await saveLocale(language);
       if (!shard) await atomicJson(statusPath, currentStatus());
-      log(`${language}: ${currentStatus().languages[language].translated}/${total} exported (${result.cached}/${texts.length} reused from cache).`);
+      log(`${language}: ${currentStatus().languages[language].translated}/${total} exported (${result.cached + texts.length - pending.length}/${texts.length} reused from cache or journal).`);
     }
   }
   const status = currentStatus();
   const complete = status.languages['zh-Hans'].complete;
-  const scope = shard ? `zh-Hans shard ${shard.index}/${shard.count}` : 'zh-Hans';
+  const displayScope = shard ? `zh-Hans shard ${shard.index}/${shard.count}` : 'zh-Hans';
   log(complete
-    ? `COMPLETE for ${scope}: all ${total} assigned source texts are translated.${shard ? ' Merge the Simplified Chinese shards, then run npm run convert to generate Traditional Chinese locally.' : ' Run npm run convert to generate or refresh Traditional Chinese locally; no API calls are needed.'}`
-    : `PARTIAL for ${scope}: ${status.languages['zh-Hans'].translated}/${total}. Run this command again to finish missing Simplified Chinese translations, then use npm run convert.`);
-  return { dryRun: false, estimates, status, processed };
+    ? `COMPLETE for ${displayScope}: all ${total} assigned source texts are translated.${shard ? ' Merge the Simplified Chinese shards, then run npm run convert to generate Traditional Chinese locally.' : ' Run npm run convert to generate or refresh Traditional Chinese locally; no API calls are needed.'}`
+    : `PARTIAL for ${displayScope}: ${status.languages['zh-Hans'].translated}/${total}. Run this command again to finish missing Simplified Chinese translations, then use npm run convert.`);
+  return { dryRun: false, estimates, status, processed, interrupted: shouldStop() };
 }
 
 export function parseArguments(args) {
@@ -261,8 +293,17 @@ export function parseArguments(args) {
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--dry-run') options.dryRun = true;
+    else if (argument === '--retry-failed') options.retryFailed = true;
     else if (argument === '--help' || argument === '-h') options.help = true;
-    else if (argument === '--language' || argument.startsWith('--language=')) {
+    else if (argument === '--model' || argument.startsWith('--model=')) {
+      const value = argument.includes('=') ? argument.slice('--model='.length) : args[++index];
+      if (typeof value !== 'string' || !/^[a-zA-Z0-9._:-]{1,160}$/.test(value)) throw new Error('--model requires a model identifier.');
+      options.model = value;
+    } else if (argument === '--reasoning-effort' || argument.startsWith('--reasoning-effort=')) {
+      const value = argument.includes('=') ? argument.slice('--reasoning-effort='.length) : args[++index];
+      if (!['low', 'high', 'max'].includes(value)) throw new Error('--reasoning-effort must be low, high, or max.');
+      options.reasoningEffort = value;
+    } else if (argument === '--language' || argument.startsWith('--language=')) {
       const language = argument.includes('=') ? argument.slice('--language='.length) : args[++index];
       if (language === 'zh-Hant') throw new Error('Do not translate zh-Hant with DeepSeek. Use npm run convert to generate Traditional Chinese locally with OpenCC.');
       if (language !== 'zh-Hans') throw new Error('--language must be zh-Hans. Use npm run convert for zh-Hant.');
@@ -284,14 +325,24 @@ export function parseArguments(args) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  let stopping = false;
+  const requestStop = () => { stopping = true; console.log('Stop requested: saving the current batch, then stopping before the next API request.'); };
+  process.on('SIGTERM', requestStop);
+  process.on('SIGINT', requestStop);
   try {
     const options = parseArguments(process.argv.slice(2));
     if (options.help) {
-      console.log('Usage: node --env-file-if-exists=.env scripts/translate.mjs [--language zh-Hans] [--limit N] [--shard INDEX/COUNT] [--dry-run]\n\nTranslates Simplified Chinese only into generated/locales/zh-Hans.json.\nTraditional Chinese is derived locally with OpenCC: npm run convert. --language zh-Hant is rejected.\n--limit counts newly exported source texts, including cache hits; dictionary entries do not count.\n--shard 1/3 assigns SHA256(text) modulo 3 + 1 = 1 and writes only generated/shards/zh-Hans-1-of-3.json.\nAll machines must use the same source snapshot and shard count. Copy shard files together and run scripts/merge-translations.mjs.\nSet DEEPSEEK_API_KEY only on the machine running this build command.\n--dry-run estimates missing text without writing files or making API calls.');
-    } else await runTranslation(options);
+      console.log('Usage: node --env-file-if-exists=.env scripts/translate.mjs [--language zh-Hans] [--limit N] [--shard INDEX/COUNT] [--model ID] [--reasoning-effort low|high|max] [--retry-failed] [--dry-run]\n\nTranslates Simplified Chinese only into generated/locales/zh-Hans.json.\nTraditional Chinese is derived locally with OpenCC: npm run convert. --language zh-Hant is rejected.\n--limit counts newly exported source texts, including cache hits; dictionary entries do not count.\n--shard 1/3 assigns SHA256(text) modulo 3 + 1 = 1 and writes only generated/shards/zh-Hans-1-of-3.json.\nAll machines must use the same source snapshot and shard count. Copy shard files together and run scripts/merge-translations.mjs.\nDefault model: deepseek-v4-pro with thinking enabled / max. Set DEEPSEEK_API_KEY_FILE (preferred) or DEEPSEEK_API_KEY locally.\nFailed/interrupted request journals block new paid attempts unless explicitly reviewed and resumed with --retry-failed.\nValidated paid responses are recoverable from the journal; each shard has an exclusive process lock.\n--dry-run estimates missing text without writing files or making API calls.');
+    } else {
+      const result = await runTranslation({ ...options, shouldStop: () => stopping });
+      if (result.interrupted) process.exitCode = 130;
+    }
   } catch (error) {
     console.error(`Translation stopped${error.code ? ` [${error.code}]` : ''}: ${error.message}`);
     console.error('Existing exports retain completed batches only. Shard runs never update global locale files or translation-status.json; run the merge command to recompute global coverage.');
     process.exitCode = 1;
+  } finally {
+    process.off('SIGTERM', requestStop);
+    process.off('SIGINT', requestStop);
   }
 }

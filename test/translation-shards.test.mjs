@@ -11,6 +11,9 @@ async function fixture(t, source) {
   const rootDir = await mkdtemp(join(tmpdir(), 'musicmap-shards-'));
   t.after(() => rm(rootDir, { recursive: true, force: true }));
   await mkdir(join(rootDir, '.cache/source'), { recursive: true });
+  await mkdir(join(rootDir, 'generated/site'), { recursive: true });
+  await writeFile(join(rootDir, 'generated/site/index.html'), '');
+  await writeFile(join(rootDir, 'generated/site/master-genrelist.json'), '{}');
   await writeFile(join(rootDir, '.cache/source/strings.json'), JSON.stringify(source));
   return rootDir;
 }

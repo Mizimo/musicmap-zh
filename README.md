@@ -4,7 +4,7 @@
 
 **DeepSeek 只將英文翻成簡體一次，再用本機 OpenCC 產生繁體並校正音樂術語。瀏覽網站及切換語言不會呼叫 DeepSeek，也不需要 API Key。** 繁體轉換不用模型，不增加 API 費用；DeepSeek 僅供建置前的簡體批次翻譯及日後新增內容。YouTube／Spotify 播放仍需連網。
 
-目前是可執行的建置工具與中文閱讀介面，尚未完成全站批次翻譯；不要將開發預覽視為完整中文譯本。代理接手前請先讀 [AGENTS.md](AGENTS.md)。
+2026-10-13 已選定 **DeepSeek V4 Pro／Max**，進入全站正式翻譯階段，採 8 個可續傳分片；尚未通過完整驗收前，不要將開發預覽視為完整中文譯本。操作與狀態查詢見 [正式翻譯交接](docs/PRODUCTION.md)，代理接手前請先讀 [AGENTS.md](AGENTS.md)。
 
 2026-10-13 模型片段對比與 Astra 補測已完成：18 個請求配置、17 組成功、68 段譯文；Ultra 被後端拒絕。詳見 [結果與交接紀錄](benchmarks/RESULTS-2026-10-13.md)。完整匿名報告與原始結果由本機資料包交付，不包含於 Git。
 
@@ -130,4 +130,4 @@ npm run test:browser
 
 原始網站與地圖屬於 [Musicmap](https://musicmap.info/)，此專案是非官方本機閱讀工具。倉庫不包含原站資產或全文；同步產物不提交。若要公開發佈原站內容或其完整譯文，需自行確認原作者的授權條件。不要刪除來源與版權標示。
 
-DeepSeek API 依[官方文件](https://api-docs.deepseek.com/)使用相容的 Chat Completions 介面，預設 `deepseek-flash`；可在 `.env` 改 `DEEPSEEK_MODEL` 與 `DEEPSEEK_BASE_URL`。API 只負責簡體，繁體的合併後轉換及網站建置不需要 Key。
+DeepSeek API 依[官方文件](https://api-docs.deepseek.com/)使用 Chat Completions 介面，預設 `deepseek-v4-pro`、開啟思考與 `reasoning_effort: max`。可用 `DEEPSEEK_API_KEY_FILE` 讀取本機專用密鑰，優先於 `DEEPSEEK_API_KEY`。正式輪的設定與來源在 manifest 凍結，不要途中切換模型。API 只負責簡體，繁體轉換及網站建置不需要 Key。

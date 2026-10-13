@@ -12,6 +12,7 @@
     "dev": "node --env-file-if-exists=.env --watch server.mjs",
     "sync": "node scripts/sync-source.mjs",
     "translate": "node --env-file-if-exists=.env scripts/translate.mjs",
+    "production": "node scripts/production.mjs",
     "convert": "node scripts/convert.mjs",
     "build": "node scripts/build.mjs",
     "snapshot": "node scripts/snapshot.mjs",
