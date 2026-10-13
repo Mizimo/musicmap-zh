@@ -135,7 +135,9 @@ npm run benchmark -- --execute --run-dir artifacts/translation-benchmark/my-run
 npm run benchmark:report -- artifacts/translation-benchmark/my-run
 ```
 
-執行器保存 prompt／source／pricing／glossary hash 與各組原始 usage。續跑會跳過所有已有嘗試，包括未完成／失敗，避免不明狀態下重複扣量；先檢查結果再決定是否另外授權重試。不要刪除帶用量的失敗結果。沒有 quality evaluator，也沒有自動挑選最佳譯文。
+執行器保存 prompt／source／pricing／glossary hash 與各組原始 usage。續跑會跳過所有已有嘗試，包括未完成／失敗，避免不明狀態下重複扣量。先檢查結果，必要的有限重試依現有授權範圍處理；原嘗試移至同一 run 的 `attempts/` 留存，不可刪除。報告會列出額外嘗試，合計已知用量及費用，未回傳用量的失敗保留為未知。沒有 quality evaluator，也沒有自動挑選最佳譯文。
+
+2026-10-13 對比已完成：15 組配置、60 段譯文，共 16 次請求。Pro Max 首次未回傳有效 usage，第二次成功；不要將首次未知消耗算成零。本機產物在 `artifacts/translation-benchmark/2026-10-13-comparison/`，換機時另行移交整包，不能從 Git 推定本機產物存在。全部實測 DeepSeek 都是非串流；後加的可選串流 transport 只做 mock 驗證，沒有用來產生本次譯文。`execution-provenance.json` 保存實際執行程式版本與 hash。
 
 DeepSeek 從 `.env` 讀金鑰；Codex 從目前機器的 `~/.codex/auth.json` 讀已登入憑證（可用 `CODEX_AUTH_PATH` 指定），不把憑證保存進結果。Codex transport 使用本機 pi-ai adapter，可由 `MUSICMAP_CODEX_ADAPTER` 指定模組位置；更換機器後先確認相容版本與登入狀態。不得將 auth 檔案、金鑰、帳號資訊或完整 HTTP headers 加入報告。
 

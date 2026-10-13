@@ -76,6 +76,83 @@ test('DeepSeek preserves charged usage on an HTTP error without returning the er
   assert.ok(!JSON.stringify(result).includes('test-secret'));
 });
 
+function deepseekSse(chunks, { done = true } = {}) {
+  const text = ': keepalive\r\n\r\n' + chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\r\n\r\n`).join('')
+    + (done ? 'data: [DONE]\r\n\r\n' : '');
+  const bytes = new TextEncoder().encode(text);
+  return new Response(new ReadableStream({ start(controller) {
+    // Split UTF-8 characters, JSON, and SSE frame boundaries across network reads.
+    for (let offset = 0; offset < bytes.length; offset += 7) controller.enqueue(bytes.slice(offset, offset + 7));
+    controller.close();
+  } }), { headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+test('DeepSeek streaming captures terminal usage in either documented final-choice or usage-only layout', async () => {
+  const usage = { prompt_tokens: 10, prompt_cache_hit_tokens: 0, completion_tokens: 30,
+    completion_tokens_details: { reasoning_tokens: 20 }, total_tokens: 40 };
+  for (const separateUsage of [false, true]) {
+    let calls = 0;
+    const result = await deepseekRequest({ ...input, key: 'test-secret', stream: true, timeoutMs: 600000,
+      fetchImpl: async (_url, options) => {
+        calls++;
+        const body = JSON.parse(options.body);
+        assert.equal(body.stream, true);
+        assert.deepEqual(body.stream_options, { include_usage: true });
+        assert.equal(body.max_tokens, 16000);
+        const chunks = [
+          { model: 'deepseek-v4-pro', choices: [{ index: 0, delta: { reasoning_content: 'DO NOT PERSIST REASONING' }, finish_reason: null }], usage: null },
+          { model: 'deepseek-v4-pro', choices: [{ index: 0, delta: { content: '爵士' }, finish_reason: null }], usage: null },
+          { model: 'deepseek-v4-pro', choices: [{ index: 0, delta: { content: '音乐🎵' }, finish_reason: null }], usage: null },
+          { model: 'deepseek-v4-pro', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: separateUsage ? null : usage },
+        ];
+        if (separateUsage) chunks.push({ model: 'deepseek-v4-pro', choices: [], usage });
+        return deepseekSse(chunks);
+      } });
+    assert.equal(calls, 1);
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, '爵士音乐🎵');
+    assert.equal(result.returnedModel, 'deepseek-v4-pro');
+    assert.equal(result.returnedEffort, null);
+    assert.equal(result.finishReason, 'stop');
+    assert.equal(result.transport, 'sse');
+    assert.equal(result.streamTransport, true);
+    assert.deepEqual(result.rawUsage, usage);
+    assert.ok(!JSON.stringify(result).includes('DO NOT PERSIST'));
+    assert.ok(!JSON.stringify(result).includes('test-secret'));
+  }
+});
+
+test('DeepSeek streaming retains charged usage and marks a missing DONE terminator incomplete', async () => {
+  const usage = { prompt_tokens: 10, completion_tokens: 30, total_tokens: 40 };
+  const result = await deepseekRequest({ ...input, key: 'test-secret', stream: true,
+    fetchImpl: async () => deepseekSse([{ choices: [{ index: 0, delta: { content: '部分文字' }, finish_reason: 'stop' }], usage }], { done: false }) });
+  assert.equal(result.status, 'incomplete');
+  assert.equal(result.errorCode, 'STREAM_INTERRUPTED');
+  assert.equal(result.rawUsage.total_tokens, 40);
+});
+
+test('DeepSeek streaming missing-usage errors retain only allowlisted upstream diagnostic codes', async () => {
+  for (const [upstream, expected] of [[{ code: 'gateway_timeout', status: 504 }, 'GATEWAY_TIMEOUT'],
+    [{ code: 'test-secret', status: 504 }, 'UNKNOWN_UPSTREAM_ERROR']]) {
+    await assert.rejects(deepseekRequest({ ...input, key: 'test-secret', stream: true,
+      fetchImpl: async () => deepseekSse([{ error: { ...upstream, message: 'test-secret reflected by upstream' } }]) }), (error) => {
+      assert.equal(error.code, 'USAGE_MISSING');
+      assert.equal(error.httpStatus, 200);
+      assert.equal(error.upstreamCode, expected);
+      assert.equal(error.upstreamStatus, 504);
+      assert.ok(!JSON.stringify(error).includes('test-secret'));
+      assert.ok(!error.message.includes('test-secret'));
+      return true;
+    });
+  }
+});
+
+test('DeepSeek JSON errors under a streaming request retain sanitized diagnostics', async () => {
+  await assert.rejects(deepseekRequest({ ...input, key: 'test-secret', stream: true,
+    fetchImpl: async () => Response.json({ error: { type: 'server_error', message: 'test-secret' } }) }),
+  (error) => error.code === 'USAGE_MISSING' && error.upstreamCode === 'SERVER_ERROR' && !JSON.stringify(error).includes('test-secret'));
+});
+
 async function codexFixture(t, { expired = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'musicmap-codex-transport-'));
   t.after(() => rm(directory, { force: true, recursive: true }));
