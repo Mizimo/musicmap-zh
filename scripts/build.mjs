@@ -1,7 +1,8 @@
 import { readFile, writeFile, mkdir, cp, rename, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
+import { CONVERTER, hashLocale, sourceHash as hashSource } from '../lib/chinese-conversion.mjs';
+import { TERMINOLOGY_HASH } from '../lib/terminology.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
@@ -46,7 +47,7 @@ export function prepareHTML(html, status) {
 
 export async function build({ projectRoot = root, allowPartial = false } = {}) {
   const input = JSON.parse(await readFile(resolve(projectRoot, '.cache/source/strings.json'), 'utf8'));
-  const sourceHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+  const sourceHash = hashSource(input);
   let prior = {};
   try { prior = JSON.parse(await readFile(resolve(projectRoot, 'generated/translation-status.json'), 'utf8')); } catch {}
   const status = { sourceHash, total: input.length, sourceDate: new Date().toISOString(), languages: {} };
@@ -57,9 +58,20 @@ export async function build({ projectRoot = root, allowPartial = false } = {}) {
     const translated = input.filter(text => typeof locales[lang][text] === 'string' && locales[lang][text].trim()).length;
     status.languages[lang] = { translated, total: input.length, complete: translated === input.length && input.length > 0 };
   }
-  const complete = Object.values(status.languages).every(value => value.complete);
-  if (prior.sourceHash && prior.sourceHash !== sourceHash && !allowPartial) throw new Error('來源已更新，請重新執行 npm run translate。');
-  if (!complete && !allowPartial) throw new Error('簡繁翻譯尚未全部完成。請執行 npm run translate；開發預覽可加 --allow-partial。');
+  const coverageComplete = Object.values(status.languages).every(value => value.complete);
+  let conversion = {};
+  try { conversion = JSON.parse(await readFile(resolve(projectRoot, 'generated/conversion-status.json'), 'utf8')) || {}; } catch {}
+  const conversionFresh = conversion.complete === true && conversion.sourceHash === sourceHash &&
+    conversion.simplifiedHash === hashLocale(locales['zh-Hans']) &&
+    conversion.traditionalHash === hashLocale(locales['zh-Hant']) &&
+    conversion.terminologyHash === TERMINOLOGY_HASH &&
+    conversion.total === input.length && conversion.converted === input.length &&
+    Object.entries(CONVERTER).every(([key, value]) => conversion.converter?.[key] === value);
+  status.languages['zh-Hant'].complete &&= conversionFresh;
+  const complete = coverageComplete && conversionFresh;
+  if (prior.sourceHash && prior.sourceHash !== sourceHash && !allowPartial) throw new Error('來源已更新，請依序執行 npm run translate、npm run convert。');
+  if (!coverageComplete && !allowPartial) throw new Error('簡繁翻譯尚未全部完成。請先執行 npm run translate，再執行 npm run convert；開發預覽可加 --allow-partial。');
+  if (!conversionFresh && !allowPartial) throw new Error('繁體轉換記錄缺失或已過期。請先完成 npm run translate，再執行 npm run convert；開發預覽可加 --allow-partial。');
   const staging = resolve(projectRoot, `.cache/build-${Date.now()}`);
   await mkdir(staging, { recursive: true });
   await cp(resolve(projectRoot, 'generated/site'), staging, { recursive: true });

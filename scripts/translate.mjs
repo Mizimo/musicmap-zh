@@ -5,11 +5,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createTranslator } from '../lib/translator.mjs';
 import { dictionary } from '../public/dictionary.js';
+import { TERMINOLOGY } from '../lib/terminology.mjs';
 
 export const LANGUAGES = ['zh-Hans', 'zh-Hant'];
 export const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const normalize = (text) => text.replace(/\s+/g, ' ').trim().toLowerCase();
 const words = new Map(Object.entries(dictionary).map(([text, value]) => [normalize(text), value]));
+const preferredTerms = new Map(TERMINOLOGY.terms.flatMap((term) => term.english.map((alias) => [normalize(alias), term.simplified])));
 
 function validTranslation(value, source) {
   return typeof value === 'string' && (source.trim().length === 0 || value.trim().length > 0);
@@ -84,7 +86,10 @@ export function shardForText(text, count) {
 export function validateShardWrapper(wrapper, { sourceHash, source, language, shard } = {}, label = 'Shard file') {
   if (!wrapper || typeof wrapper !== 'object' || Array.isArray(wrapper)) throw new Error(`${label}: expected a shard object.`);
   if (wrapper.sourceHash !== sourceHash) throw new Error(`${label}: sourceHash does not match the current source snapshot.`);
-  if (!LANGUAGES.includes(wrapper.language) || (language && wrapper.language !== language)) {
+  if (wrapper.language === 'zh-Hant') {
+    throw new Error(`${label}: Traditional Chinese shards are not accepted. Translate zh-Hans only, then use npm run convert to generate zh-Hant locally with OpenCC.`);
+  }
+  if (wrapper.language !== 'zh-Hans' || (language && wrapper.language !== language)) {
     throw new Error(`${label}: invalid or unexpected language.`);
   }
   const declared = validateShard(wrapper.shard);
@@ -124,7 +129,10 @@ export function translationStatus(sourceHash, source, localeValues) {
     total,
     languages: Object.fromEntries(LANGUAGES.map((language) => {
       const translated = source.filter((text) => Object.hasOwn(localeValues[language], text)).length;
-      return [language, { translated, total, complete: translated === total }];
+      return [language, {
+        translated, total, complete: translated === total,
+        ...(language === 'zh-Hant' ? { derived: true } : {}),
+      }];
     })),
   };
 }
@@ -149,7 +157,7 @@ export function makeBatches(texts, { maxTexts = 20, maxCharacters = 14_000 } = {
 
 export async function runTranslation({
   rootDir = PROJECT_ROOT,
-  languages = LANGUAGES,
+  languages = ['zh-Hans'],
   limit = Infinity,
   dryRun = false,
   shard: requestedShard,
@@ -159,8 +167,11 @@ export async function runTranslation({
   fetchImpl = globalThis.fetch,
   log = console.log,
 } = {}) {
-  if (!Array.isArray(languages) || languages.length === 0 || languages.some((language) => !LANGUAGES.includes(language))) {
-    throw new Error('language must be zh-Hans or zh-Hant.');
+  if (Array.isArray(languages) && languages.includes('zh-Hant')) {
+    throw new Error('Traditional Chinese is generated locally with OpenCC. Use npm run convert; DeepSeek translation is only available for zh-Hans.');
+  }
+  if (!Array.isArray(languages) || languages.length === 0 || languages.some((language) => language !== 'zh-Hans')) {
+    throw new Error('language must be zh-Hans. Use npm run convert to generate zh-Hant locally.');
   }
   if (limit !== Infinity && (!Number.isSafeInteger(limit) || limit < 0)) {
     throw new Error('limit must be a nonnegative integer.');
@@ -171,12 +182,12 @@ export async function runTranslation({
   const source = shard ? entireSource.filter((text) => shardForText(text, shard.count) === shard.index) : entireSource;
   const total = source.length;
   if (shard) log(`Shard ${shard.index}/${shard.count}: assigned ${total}/${entireSource.length} source texts; snapshot ${sourceHash}.`);
-  const localePaths = Object.fromEntries(LANGUAGES.map((language) => [language, shard
+  const localePaths = Object.fromEntries(LANGUAGES.map((language) => [language, shard && language === 'zh-Hans'
     ? join(rootDir, 'generated/shards', `${language}-${shard.index}-of-${shard.count}.json`)
     : join(rootDir, 'generated/locales', `${language}.json`),
   ]));
   const localeValues = Object.fromEntries(await Promise.all(LANGUAGES.map(async (language) => [
-    language, shard
+    language, shard && language === 'zh-Hans'
       ? await readShard(localePaths[language], { sourceHash, source: entireSource, language, shard })
       : await readLocale(localePaths[language], source),
   ])));
@@ -184,7 +195,7 @@ export async function runTranslation({
   for (const language of selected) {
     const locale = localeValues[language];
     for (const text of source) {
-      const manual = words.get(normalize(text))?.[language === 'zh-Hans' ? 0 : 1];
+      const manual = preferredTerms.get(normalize(text)) ?? words.get(normalize(text))?.[0];
       if (!Object.hasOwn(locale, text)) {
         if (manual !== undefined) locale[text] = manual;
         else if (text.trim().length === 0) locale[text] = text;
@@ -237,11 +248,11 @@ export async function runTranslation({
     }
   }
   const status = currentStatus();
-  const allComplete = LANGUAGES.every((language) => status.languages[language].complete);
-  const scope = shard ? `shard ${shard.index}/${shard.count}` : 'both Chinese locale files';
-  log(allComplete
-    ? `COMPLETE for ${scope}: all ${total} assigned source texts are translated in both languages.${shard ? ' Merge all shard files to check corpus completeness.' : ''}`
-    : `PARTIAL for ${scope}: ${LANGUAGES.map((language) => `${language} ${status.languages[language].translated}/${total}`).join(', ')}. Run again without a limit to finish missing translations.`);
+  const complete = status.languages['zh-Hans'].complete;
+  const scope = shard ? `zh-Hans shard ${shard.index}/${shard.count}` : 'zh-Hans';
+  log(complete
+    ? `COMPLETE for ${scope}: all ${total} assigned source texts are translated.${shard ? ' Merge the Simplified Chinese shards, then run npm run convert to generate Traditional Chinese locally.' : ' Run npm run convert to generate or refresh Traditional Chinese locally; no API calls are needed.'}`
+    : `PARTIAL for ${scope}: ${status.languages['zh-Hans'].translated}/${total}. Run this command again to finish missing Simplified Chinese translations, then use npm run convert.`);
   return { dryRun: false, estimates, status, processed };
 }
 
@@ -253,7 +264,8 @@ export function parseArguments(args) {
     else if (argument === '--help' || argument === '-h') options.help = true;
     else if (argument === '--language' || argument.startsWith('--language=')) {
       const language = argument.includes('=') ? argument.slice('--language='.length) : args[++index];
-      if (!LANGUAGES.includes(language)) throw new Error('--language must be zh-Hans or zh-Hant.');
+      if (language === 'zh-Hant') throw new Error('Do not translate zh-Hant with DeepSeek. Use npm run convert to generate Traditional Chinese locally with OpenCC.');
+      if (language !== 'zh-Hans') throw new Error('--language must be zh-Hans. Use npm run convert for zh-Hant.');
       options.languages = [language];
     } else if (argument === '--limit' || argument.startsWith('--limit=')) {
       const value = argument.includes('=') ? argument.slice('--limit='.length) : args[++index];
@@ -275,7 +287,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const options = parseArguments(process.argv.slice(2));
     if (options.help) {
-      console.log('Usage: node --env-file-if-exists=.env scripts/translate.mjs [--language zh-Hans|zh-Hant] [--limit N] [--shard INDEX/COUNT] [--dry-run]\n\nPretranslates extracted source strings into generated/locales/*.json.\nDefault: both languages. --limit is shared across languages.\n--shard 1/3 assigns SHA256(text) modulo 3 + 1 = 1 and writes only generated/shards/*.json.\nAll machines must use the same source snapshot and shard count. Copy shard files together and run scripts/merge-translations.mjs.\nSet DEEPSEEK_API_KEY only on the machine running this build command.\n--dry-run estimates missing text without writing files or making API calls.');
+      console.log('Usage: node --env-file-if-exists=.env scripts/translate.mjs [--language zh-Hans] [--limit N] [--shard INDEX/COUNT] [--dry-run]\n\nTranslates Simplified Chinese only into generated/locales/zh-Hans.json.\nTraditional Chinese is derived locally with OpenCC: npm run convert. --language zh-Hant is rejected.\n--limit counts newly exported source texts, including cache hits; dictionary entries do not count.\n--shard 1/3 assigns SHA256(text) modulo 3 + 1 = 1 and writes only generated/shards/zh-Hans-1-of-3.json.\nAll machines must use the same source snapshot and shard count. Copy shard files together and run scripts/merge-translations.mjs.\nSet DEEPSEEK_API_KEY only on the machine running this build command.\n--dry-run estimates missing text without writing files or making API calls.');
     } else await runTranslation(options);
   } catch (error) {
     console.error(`Translation stopped${error.code ? ` [${error.code}]` : ''}: ${error.message}`);

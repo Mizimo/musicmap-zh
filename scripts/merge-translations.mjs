@@ -32,6 +32,7 @@ export async function mergeTranslations({
   const files = await collectJsonFiles(directory);
   if (files.length === 0) throw new Error(`No JSON shard files found in ${directory}.`);
   const wrappers = [];
+  let shardCount;
   // Finish validating every input before making any change to published locale files.
   for (const path of files) {
     let wrapper;
@@ -41,6 +42,10 @@ export async function mergeTranslations({
       throw new Error(`Cannot parse shard file ${path} as JSON.`);
     }
     validateShardWrapper(wrapper, { sourceHash, source }, path);
+    if (shardCount !== undefined && wrapper.shard.count !== shardCount) {
+      throw new Error(`${path}: mixed shard counts (${shardCount} and ${wrapper.shard.count}). All shard files in one merge must use the same total count.`);
+    }
+    shardCount = wrapper.shard.count;
     wrappers.push({ path, wrapper });
   }
 
@@ -62,16 +67,14 @@ export async function mergeTranslations({
   }
 
   const status = translationStatus(sourceHash, source, localeValues);
-  for (const language of LANGUAGES) await atomicJson(localePaths[language], localeValues[language]);
+  await atomicJson(localePaths['zh-Hans'], localeValues['zh-Hans']);
   await atomicJson(join(rootDir, 'generated/translation-status.json'), status);
   log(`Merged ${files.length} shard files; added ${added} translations for source snapshot ${sourceHash}.`);
-  for (const language of LANGUAGES) {
-    const coverage = status.languages[language];
-    log(`${language}: ${coverage.translated}/${coverage.total} translated; ${coverage.complete ? 'COMPLETE' : 'PARTIAL'}.`);
-  }
-  if (!LANGUAGES.every((language) => status.languages[language].complete)) {
-    log('The bilingual build is incomplete. Translate or collect the missing partitions, then merge again.');
-  }
+  const coverage = status.languages['zh-Hans'];
+  log(`zh-Hans: ${coverage.translated}/${coverage.total} translated; ${coverage.complete ? 'COMPLETE' : 'PARTIAL'}.`);
+  log(coverage.complete
+    ? 'Simplified Chinese is complete. Run npm run convert to generate or refresh Traditional Chinese locally with OpenCC; no API calls are needed.'
+    : 'Simplified Chinese is incomplete. Translate or collect missing zh-Hans partitions, merge again, then run npm run convert.');
   return { files: files.length, added, status };
 }
 
@@ -87,7 +90,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const options = parseMergeArguments(process.argv.slice(2));
     if (options.help) {
-      console.log('Usage: node scripts/merge-translations.mjs [SHARD_DIRECTORY]\n\nDefault directory: generated/shards. All .json files are read recursively.\nRequires the same .cache/source/strings.json snapshot used by every shard.\nChecks source hashes, languages, shard partitions, nonempty translations, and conflicts before writing.\nWrites generated/locales/{zh-Hans,zh-Hant}.json and honest generated/translation-status.json coverage.\nNo API calls or API key are needed.');
+      console.log('Usage: node scripts/merge-translations.mjs [SHARD_DIRECTORY]\n\nDefault directory: generated/shards. All .json files are read recursively.\nAccepts only zh-Hans shards, all with the same source snapshot and shard count.\nChecks source hashes, shard partitions, nonempty translations, and conflicts before writing.\nWrites generated/locales/zh-Hans.json and honest generated/translation-status.json coverage.\nTraditional Chinese shards are rejected; run npm run convert after merging to derive zh-Hant locally.\nNo API calls or API key are needed.');
     } else await mergeTranslations(options);
   } catch (error) {
     console.error(`Merge stopped: ${error.message}`);

@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { build, prepareBundle, prepareHTML } from '../scripts/build.mjs';
+import { CONVERTER, convertToTraditional, hashLocale, sourceHash } from '../lib/chinese-conversion.mjs';
+import { TERMINOLOGY_HASH } from '../lib/terminology.mjs';
 
 function upstreamBundle(player = 'Bn') {
   return `var ${player};
@@ -95,6 +97,22 @@ async function locale(projectRoot, language, entries) {
   await writeFile(join(projectRoot, `generated/locales/${language}.json`), JSON.stringify(entries));
 }
 
+async function conversionMetadata(projectRoot, overrides = {}) {
+  const readJson = async path => JSON.parse(await readFile(join(projectRoot, path), 'utf8'));
+  const input = await readJson('.cache/source/strings.json');
+  const metadata = {
+    sourceHash: sourceHash(input),
+    simplifiedHash: hashLocale(await readJson('generated/locales/zh-Hans.json')),
+    traditionalHash: hashLocale(await readJson('generated/locales/zh-Hant.json')),
+    terminologyHash: TERMINOLOGY_HASH,
+    converter: CONVERTER,
+    total: input.length, converted: input.length, complete: true,
+    ...overrides,
+  };
+  await writeFile(join(projectRoot, 'generated/conversion-status.json'), JSON.stringify(metadata));
+  return metadata;
+}
+
 test('release builds require both complete locales and leave the existing dist untouched on failure', async t => {
   const projectRoot = await fixture(t);
   await mkdir(join(projectRoot, 'dist'));
@@ -114,6 +132,7 @@ test('complete build bundles both static locales and patches only the distributi
   for (const language of ['zh-Hans', 'zh-Hant']) {
     await locale(projectRoot, language, { Search: '搜尋', 'A genre description.': '流派說明。' });
   }
+  await convertToTraditional({ rootDir: projectRoot, log: () => {} });
   const status = await build({ projectRoot });
   assert.ok(Object.values(status.languages).every(language => language.complete));
   assert.equal(await readFile(join(projectRoot, 'generated/site/main.bundle.js'), 'utf8'), upstreamBundle());
@@ -124,4 +143,70 @@ test('complete build bundles both static locales and patches only the distributi
   assert.deepEqual(JSON.parse(await readFile(join(projectRoot, 'dist/_zh/translation-status.json'), 'utf8')), status);
   await writeFile(join(projectRoot, 'generated/translation-status.json'), JSON.stringify({ sourceHash: 'outdated' }));
   await assert.rejects(build({ projectRoot }), /來源已更新/);
+});
+
+test('release requires conversion provenance even when both locale files have complete coverage', async t => {
+  const projectRoot = await fixture(t);
+  for (const language of ['zh-Hans', 'zh-Hant']) {
+    await locale(projectRoot, language, { Search: '搜索', 'A genre description.': '流派说明。' });
+  }
+  await assert.rejects(build({ projectRoot }), /轉換記錄缺失或已過期.*npm run convert/);
+  const preview = await build({ projectRoot, allowPartial: true });
+  assert.equal(preview.languages['zh-Hans'].complete, true);
+  assert.deepEqual(preview.languages['zh-Hant'], { translated: 2, total: 2, complete: false });
+  const html = await readFile(join(projectRoot, 'dist/index.html'), 'utf8');
+  assert.match(html, /"zh-Hant":\{"translated":2,"total":2,"complete":false\}/);
+  await conversionMetadata(projectRoot);
+  assert.equal((await build({ projectRoot })).languages['zh-Hant'].complete, true);
+});
+
+test('editing either locale invalidates conversion until metadata is refreshed', async t => {
+  const projectRoot = await fixture(t);
+  for (const language of ['zh-Hans', 'zh-Hant']) {
+    await locale(projectRoot, language, { Search: '搜索', 'A genre description.': '流派说明。' });
+  }
+  await conversionMetadata(projectRoot);
+  let previous = await build({ projectRoot });
+  for (const language of ['zh-Hans', 'zh-Hant']) {
+    await locale(projectRoot, language, { Search: '搜索', 'A genre description.': '已校对的说明。' });
+    await assert.rejects(build({ projectRoot }), /轉換記錄缺失或已過期/);
+    assert.deepEqual(JSON.parse(await readFile(join(projectRoot, 'dist/_zh/translation-status.json'), 'utf8')), previous);
+    const preview = await build({ projectRoot, allowPartial: true });
+    assert.equal(preview.languages['zh-Hant'].complete, false);
+    await conversionMetadata(projectRoot);
+    const refreshed = await build({ projectRoot });
+    assert.equal(refreshed.languages['zh-Hant'].complete, true);
+    previous = refreshed;
+  }
+});
+
+test('stale source, incomplete conversion, and wrong converter metadata prevent release', async t => {
+  const projectRoot = await fixture(t);
+  for (const language of ['zh-Hans', 'zh-Hant']) {
+    await locale(projectRoot, language, { Search: '搜索', 'A genre description.': '流派说明。' });
+  }
+  for (const overrides of [
+    { sourceHash: 'outdated' },
+    { simplifiedHash: 'outdated' },
+    { traditionalHash: 'outdated' },
+    { terminologyHash: 'outdated' },
+    { complete: false },
+    { total: 3 },
+    { converted: 1 },
+    { converter: { ...CONVERTER, to: 'hk' } },
+    { converter: { ...CONVERTER, version: 'older' } },
+  ]) {
+    await conversionMetadata(projectRoot, overrides);
+    await assert.rejects(build({ projectRoot }), /轉換記錄缺失或已過期/);
+  }
+});
+
+test('empty source is never a complete release even if conversion metadata claims completion', async t => {
+  const projectRoot = await fixture(t);
+  await writeFile(join(projectRoot, '.cache/source/strings.json'), '[]');
+  for (const language of ['zh-Hans', 'zh-Hant']) await locale(projectRoot, language, {});
+  await conversionMetadata(projectRoot);
+  await assert.rejects(build({ projectRoot }), /簡繁翻譯尚未全部完成/);
+  const preview = await build({ projectRoot, allowPartial: true });
+  for (const language of Object.values(preview.languages)) assert.deepEqual(language, { translated: 0, total: 0, complete: false });
 });

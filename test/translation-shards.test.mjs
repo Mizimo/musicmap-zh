@@ -38,7 +38,7 @@ function fakeApi(seen = []) {
   };
 }
 
-async function wrapper(rootDir, { text = 'A unique original paragraph.', translation = '一段翻譯。', language = 'zh-Hant', count = 3 } = {}) {
+async function wrapper(rootDir, { text = 'A unique original paragraph.', translation = '一段翻譯。', language = 'zh-Hans', count = 3 } = {}) {
   const { sourceHash } = await loadSource(rootDir);
   return { sourceHash, language, shard: { index: shardForText(text, count), count }, translations: { [text]: translation } };
 }
@@ -65,37 +65,39 @@ test('shard mode resumes its own output and never touches global locales or stat
   await putJson(rootDir, 'generated/locales/zh-Hant.json', localeSentinel);
   await putJson(rootDir, 'generated/translation-status.json', statusSentinel);
   const seen = [];
-  const settings = { rootDir, languages: ['zh-Hant'], shard, apiKey: 'test', fetchImpl: fakeApi(seen), log: () => {} };
+  const lines = [];
+  const settings = { rootDir, languages: ['zh-Hans'], shard, apiKey: 'test', fetchImpl: fakeApi(seen), log: (line) => lines.push(line) };
   const partial = await runTranslation({ ...settings, limit: 1 });
   assert.equal(partial.processed, 1);
   assert.equal(partial.status.total, assigned.length);
   assert.equal(partial.status.corpusTotal, source.length);
-  assert.equal(partial.status.languages['zh-Hant'].complete, false);
-  const shardPath = `generated/shards/zh-Hant-${shard.index}-of-${shard.count}.json`;
+  assert.equal(partial.status.languages['zh-Hans'].complete, false);
+  const shardPath = `generated/shards/zh-Hans-${shard.index}-of-${shard.count}.json`;
   const first = await getJson(rootDir, shardPath);
   assert.deepEqual(first.shard, shard);
-  assert.equal(first.language, 'zh-Hant');
-  assert.equal(first.translations.Search, '搜尋');
+  assert.equal(first.language, 'zh-Hans');
+  assert.equal(first.translations.Search, '搜索');
   assert.equal(Object.keys(first.translations).length, 2);
   const firstTranslated = seen[0];
   seen.length = 0;
 
   const finished = await runTranslation(settings);
-  assert.equal(finished.status.languages['zh-Hant'].complete, true);
+  assert.equal(finished.status.languages['zh-Hans'].complete, true);
+  assert.match(lines.at(-1), /^COMPLETE for zh-Hans shard/);
   assert.ok(!seen.includes(firstTranslated));
   assert.ok(seen.every((text) => shardForText(text, shard.count) === shard.index));
   assert.deepEqual(Object.keys((await getJson(rootDir, shardPath)).translations).sort(), assigned.sort());
   assert.deepEqual(await getJson(rootDir, 'generated/locales/zh-Hant.json'), localeSentinel);
   assert.deepEqual(await getJson(rootDir, 'generated/translation-status.json'), statusSentinel);
   await assert.rejects(readFile(join(rootDir, 'generated/locales/zh-Hans.json')), { code: 'ENOENT' });
-  await assert.rejects(readFile(join(rootDir, `generated/shards/zh-Hans-${shard.index}-of-${shard.count}.json`)), { code: 'ENOENT' });
+  await assert.rejects(readFile(join(rootDir, `generated/shards/zh-Hant-${shard.index}-of-${shard.count}.json`)), { code: 'ENOENT' });
 });
 
 test('shard dry run makes no output and existing shards reject a changed snapshot', async (t) => {
   const rootDir = await fixture(t, ['Search', 'A unique original paragraph.']);
-  const options = { rootDir, shard: { index: 1, count: 1 }, languages: ['zh-Hant'], apiKey: '', log: () => {}, fetchImpl: () => assert.fail('Unexpected API call') };
+  const options = { rootDir, shard: { index: 1, count: 1 }, languages: ['zh-Hans'], apiKey: '', log: () => {}, fetchImpl: () => assert.fail('Unexpected API call') };
   await runTranslation({ ...options, dryRun: true });
-  await assert.rejects(readFile(join(rootDir, 'generated/shards/zh-Hant-1-of-1.json')), { code: 'ENOENT' });
+  await assert.rejects(readFile(join(rootDir, 'generated/shards/zh-Hans-1-of-1.json')), { code: 'ENOENT' });
   await runTranslation({ ...options, limit: 0 });
   await putJson(rootDir, '.cache/source/strings.json', ['Search', 'A unique original paragraph.', 'New source text.']);
   await assert.rejects(runTranslation({ ...options, limit: 0 }), /sourceHash/);
@@ -108,16 +110,18 @@ test('merge recomputes incomplete coverage, then becomes complete when remaining
   await runTranslation({ ...settings, shard: { index: 1, count: 3 } });
   const first = await mergeTranslations({ rootDir, log: () => {} });
   const assigned = source.filter((text) => shardForText(text, 3) === 1).length;
-  assert.equal(first.files, 2);
-  assert.deepEqual(first.status.languages['zh-Hant'], { translated: assigned, total: source.length, complete: false });
+  assert.equal(first.files, 1);
+  assert.deepEqual(first.status.languages['zh-Hans'], { translated: assigned, total: source.length, complete: false });
   assert.equal(first.status.languages['zh-Hans'].complete, false);
   for (const index of [2, 3]) await runTranslation({ ...settings, shard: { index, count: 3 } });
   const finished = await mergeTranslations({ rootDir, log: () => {} });
-  assert.equal(finished.files, 6);
+  assert.equal(finished.files, 3);
   assert.equal(finished.status.languages['zh-Hans'].complete, true);
-  assert.equal(finished.status.languages['zh-Hant'].complete, true);
-  assert.equal(finished.added, (source.length - assigned) * 2);
-  assert.equal(Object.keys(await getJson(rootDir, 'generated/locales/zh-Hant.json')).length, source.length);
+  assert.equal(finished.status.languages['zh-Hant'].complete, false);
+  assert.equal(finished.status.languages['zh-Hant'].derived, true);
+  assert.equal(finished.added, source.length - assigned);
+  assert.equal(Object.keys(await getJson(rootDir, 'generated/locales/zh-Hans.json')).length, source.length);
+  await assert.rejects(readFile(join(rootDir, 'generated/locales/zh-Hant.json')), { code: 'ENOENT' });
   assert.deepEqual(await getJson(rootDir, 'generated/translation-status.json'), finished.status);
   assert.equal((await mergeTranslations({ rootDir, log: () => {} })).added, 0);
 });
@@ -127,10 +131,10 @@ test('merge validates every input before writing and rejects snapshot mismatches
   const valid = await wrapper(rootDir);
   await putJson(rootDir, 'generated/shards/first-valid.json', valid);
   await putJson(rootDir, 'generated/shards/nested/last-wrong.json', { ...valid, sourceHash: '0'.repeat(64) });
-  await putJson(rootDir, 'generated/locales/zh-Hant.json', {});
+  await putJson(rootDir, 'generated/locales/zh-Hans.json', {});
   await putJson(rootDir, 'generated/translation-status.json', { unchanged: true });
   await assert.rejects(mergeTranslations({ rootDir, log: () => {} }), /sourceHash/);
-  assert.deepEqual(await getJson(rootDir, 'generated/locales/zh-Hant.json'), {});
+  assert.deepEqual(await getJson(rootDir, 'generated/locales/zh-Hans.json'), {});
   assert.deepEqual(await getJson(rootDir, 'generated/translation-status.json'), { unchanged: true });
 });
 
@@ -141,11 +145,11 @@ test('merge rejects conflicting translations within shards and against existing 
   await putJson(rootDir, 'generated/shards/first.json', first);
   await putJson(rootDir, 'generated/shards/second.json', { ...first, translations: { [source[0]]: '不同的翻譯。' } });
   await assert.rejects(mergeTranslations({ rootDir, log: () => {} }), /Translation conflict/);
-  await assert.rejects(readFile(join(rootDir, 'generated/locales/zh-Hant.json')), { code: 'ENOENT' });
+  await assert.rejects(readFile(join(rootDir, 'generated/locales/zh-Hans.json')), { code: 'ENOENT' });
   await rm(join(rootDir, 'generated/shards/second.json'));
-  await putJson(rootDir, 'generated/locales/zh-Hant.json', { [source[0]]: '現有的翻譯。' });
+  await putJson(rootDir, 'generated/locales/zh-Hans.json', { [source[0]]: '現有的翻譯。' });
   await assert.rejects(mergeTranslations({ rootDir, log: () => {} }), /Translation conflict/);
-  assert.deepEqual(await getJson(rootDir, 'generated/locales/zh-Hant.json'), { [source[0]]: '現有的翻譯。' });
+  assert.deepEqual(await getJson(rootDir, 'generated/locales/zh-Hans.json'), { [source[0]]: '現有的翻譯。' });
 });
 
 test('merge rejects invalid language, partition metadata, unknown source, and empty translations', async (t) => {
@@ -169,14 +173,33 @@ test('merge rejects invalid language, partition metadata, unknown source, and em
 
 test('merge preserves compatible existing translations absent from supplied shards', async (t) => {
   const rootDir = await fixture(t, ['A unique original paragraph.', 'Another original paragraph.']);
-  await putJson(rootDir, 'generated/locales/zh-Hant.json', { 'Another original paragraph.': '另一段翻譯。', 'Old removed paragraph.': '過期' });
+  await putJson(rootDir, 'generated/locales/zh-Hans.json', { 'Another original paragraph.': '另一段翻譯。', 'Old removed paragraph.': '過期' });
+  await putJson(rootDir, 'generated/locales/zh-Hant.json', { 'Another original paragraph.': '保留繁體產物。' });
   await putJson(rootDir, 'generated/shards/one.json', await wrapper(rootDir));
   const merged = await mergeTranslations({ rootDir, log: () => {} });
-  assert.deepEqual(await getJson(rootDir, 'generated/locales/zh-Hant.json'), {
+  assert.deepEqual(await getJson(rootDir, 'generated/locales/zh-Hans.json'), {
     'A unique original paragraph.': '一段翻譯。', 'Another original paragraph.': '另一段翻譯。',
   });
-  assert.equal(merged.status.languages['zh-Hant'].complete, true);
-  assert.equal(merged.status.languages['zh-Hans'].complete, false);
+  assert.equal(merged.status.languages['zh-Hans'].complete, true);
+  assert.deepEqual(merged.status.languages['zh-Hant'], { translated: 1, total: 2, complete: false, derived: true });
+  assert.deepEqual(await getJson(rootDir, 'generated/locales/zh-Hant.json'), { 'Another original paragraph.': '保留繁體產物。' });
+});
+
+test('merge rejects Traditional Chinese shards with a local conversion instruction', async (t) => {
+  const rootDir = await fixture(t, ['A unique original paragraph.']);
+  await putJson(rootDir, 'generated/shards/legacy-traditional.json', await wrapper(rootDir, { language: 'zh-Hant' }));
+  await assert.rejects(mergeTranslations({ rootDir, log: () => {} }), /npm run convert/);
+  await assert.rejects(readFile(join(rootDir, 'generated/translation-status.json')), { code: 'ENOENT' });
+});
+
+test('merge rejects mixed shard counts before updating any locale or status', async (t) => {
+  const rootDir = await fixture(t, ['A unique original paragraph.', 'Another original paragraph.']);
+  await putJson(rootDir, 'generated/shards/one.json', await wrapper(rootDir, { count: 2 }));
+  await putJson(rootDir, 'generated/shards/two.json', await wrapper(rootDir, { text: 'Another original paragraph.', count: 3 }));
+  await putJson(rootDir, 'generated/translation-status.json', { untouched: true });
+  await assert.rejects(mergeTranslations({ rootDir, log: () => {} }), /mixed shard counts/);
+  assert.deepEqual(await getJson(rootDir, 'generated/translation-status.json'), { untouched: true });
+  await assert.rejects(readFile(join(rootDir, 'generated/locales/zh-Hans.json')), { code: 'ENOENT' });
 });
 
 test('CLI supports 1-based shards and merge directories while rejecting invalid partitions', () => {

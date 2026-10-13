@@ -70,7 +70,7 @@ function updateStatus(kind, message) {
 function lookup(text, lang = language) {
   if (lang === 'en') return text;
   const entry = words.get(normalize(text));
-  return entry ? entry[lang === 'zh-Hans' ? 0 : 1] : translated.get(`${lang}:${sourceKey(text)}`);
+  return translated.get(`${lang}:${sourceKey(text)}`) || (entry ? entry[lang === 'zh-Hans' ? 0 : 1] : undefined);
 }
 
 function fitMapText(element) {

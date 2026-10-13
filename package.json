@@ -12,6 +12,7 @@
     "dev": "node --env-file-if-exists=.env --watch server.mjs",
     "sync": "node scripts/sync-source.mjs",
     "translate": "node --env-file-if-exists=.env scripts/translate.mjs",
+    "convert": "node scripts/convert.mjs",
     "build": "node scripts/build.mjs",
     "snapshot": "node scripts/snapshot.mjs",
     "merge": "node scripts/merge-translations.mjs",
@@ -23,6 +24,7 @@
   },
   "dependencies": {
     "cheerio": "^1.2.0",
+    "opencc-js": "1.4.2",
     "tar": "^7.5.22"
   }
 }
