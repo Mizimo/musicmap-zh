@@ -39,6 +39,8 @@ GitHub 擁有者固定為 **Mizimo**，倉庫為 **Mizimo/musicmap-zh**。使用
 
 ## 本輪正式翻譯
 
+**目前採獨立分片續跑模式（2026-10-13）**：為減少單片格式失敗造成的整體停等，原 `musicmap-translation` 與 `musicmap-follow-through` 服務已停用，改用 `musicmap-shard-1` 至 `musicmap-shard-8`，每個 unit 只處理固定的一片且 `Restart=no`。啟動器為 `scripts/run-production-shard.mjs`，每次先核对凍結 manifest 與原協調服務已停止，再執行原翻譯 CLI；模型、來源、提示與分片鎖不變。失敗只對所屬分片做已診斷的有限處理，不能重啟全局監看器。切換紀錄在 `generated/production/independent-mode.json`；原 production 狀態保留 interrupted，分片覆蓋數仍有效，實際活躍程序以分片 unit／鎖為準。八片全部完整且停止後，才啟原 production 執行合併、轉換、建置及驗收；完整分片會跳過付費翻譯。詳見 [操作文件](docs/PRODUCTION.md)。
+
 先閱讀 [正式翻譯操作與交接](docs/PRODUCTION.md)。使用 `npm run production -- --prepare` 凍結設定並分配現有簡體成果；`--execute` 依 manifest 執行；不帶參數或 `--status` 只讀取進度，不會呼叫 API。凍結後不可直接改模型、提示、上下文工具、術語、字典、來源或分片數。
 
 請求固定開啟 thinking、`reasoning_effort: max`，單批最多 20 個目標片段、14,000 個來源字元，`max_tokens: 32768`，逾時 600 秒。段落與流派背景由本機快照產生，作為唯讀參考；不可把整段背景重複放進片段譯文。快取區分模型、檔位、提示、術語及上下文，避免拿舊 Flash／無思考輸出冒充 Pro／Max。

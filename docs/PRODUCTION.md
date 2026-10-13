@@ -34,6 +34,21 @@ npm run production -- --status
 
 不要在背景工作運行時重新執行相同分片。合併、繁體轉換與建置由協調程序在所有工作片結束後依序執行。
 
+## 獨立分片模式
+
+為避免一片格式錯誤令其餘七片停機，可由協調者明確記錄切換至獨立模式：保留原 manifest、journal 及 follow-through ledger，記下切換時間、manifest hash、原自動補試預留數與八個固定 unit 的分片對應。先讓正在執行的補試結束，再停妥 `musicmap-translation.service` 與 `musicmap-follow-through.service`；此模式期間兩者保持停止。
+
+```bash
+node scripts/run-production-shard.mjs                    # 只讀進度
+node scripts/run-production-shard.mjs --execute --shard 3/8
+# 僅在人工診斷並核對原失敗批次後，明確執行有限補試：
+node scripts/run-production-shard.mjs --execute --shard 3/8 --limit 10 --retry-failed
+```
+
+每個 unit 固定一片、`Restart=no`、`KillMode=mixed`、`TimeoutStopSec=660`。包裝器每次核對凍結 manifest，固定模型、檔位、endpoint、token 上限、逾時及密鑰檔案來源；只執行原 CLI 一次，沿用其分片鎖和 journal 恢復。其他分片可繼續執行；同片不可重複啟動。SIGTERM 只通知自己的子程序保存當前批次後停止。一般 unit 不帶 `--retry-failed`；失敗片由協調者診斷後另行有限補試，所有實際用量與費用仍寫入原 journal。原自動 20 次上限不清空、不退還，也不把人工拆批偽裝為自動成功。
+
+包裝器不啟動任何服務、不改寫 production 狀態；進度以實際分片和 unit 狀態核對，原協調程序的 `state` 可能仍為 interrupted／failed。八片完整、所有獨立 unit 均停止且鎖已釋放後，執行原 `npm run production -- --execute`：它會跳過完整分片，直接 merge、convert、build、test:browser。再完成全站 QA，才能報告交付完成。
+
 本次使用者已要求完整跟進，可另外執行 [有限恢復監看器](FOLLOW-THROUGH.md)。它只在原服務停止後，對符合嚴格條件的已知用量格式錯誤補試一次；持久上限與原始紀錄不因重開而清除。這不改變主服務的 `Restart=no`，也不授權無限重試。驗收完成後見 [完整網站交付](DELIVERY.md)。
 
 ## 失敗與續跑
