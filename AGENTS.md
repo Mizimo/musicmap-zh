@@ -6,6 +6,8 @@
 
 目前階段：2026-10-13 使用者已選定 **`deepseek-v4-pro / max`**，並明確要求「開始推進」，授權正式簡體翻譯。採現有凍結來源、8 個固定分片；可在本機執行，亦可安全交接到不同機器。DeepSeek 只翻簡體一次，繁體由 OpenCC 與術語校正產生。完整度以 `npm run production -- --status` 為準，不要因程序已啟動就宣稱「全站已翻譯」。正式結果必須通過簡繁完整度、轉換版本檢查及瀏覽器驗證。
 
+同日使用者進一步要求**完整跟進整個項目**。Agent 應持續檢查運行與失敗紀錄、處理有限重試，直到全站翻譯、簡繁轉換、正式建置、驗收、私下交付及 GitHub 文件整理完成；不能把背景程序啟動當作交付完成。已授權範圍內的格式錯誤重試不必反覆要求使用者確認，但每次保留原紀錄及費用；同批再次失敗時先診斷或縮小批次，不可無限重試。
+
 本輪專用 API 密鑰在 `~/.ssh/musicmap_trans`，**它是 DeepSeek API key，不是 SSH 私鑰**。`.env` 使用 `DEEPSEEK_API_KEY_FILE` 指向它，優先於舊的 `DEEPSEEK_API_KEY`；不複製進 Git 或交接包。該檔及 `.env` 權限應為 0600。GitHub 仍使用 Mizimo 的既有登入。
 
 GitHub 擁有者固定為 **Mizimo**，倉庫為 **Mizimo/musicmap-zh**。使用者明確禁止建在 kaede／Fukikaede 帳號。GitHub 寫入前核對 `gh api user --jq .login`；不得為方便而改用其他帳號。既有倉庫保持私人可見性，除非使用者另有指示。
@@ -41,7 +43,9 @@ GitHub 擁有者固定為 **Mizimo**，倉庫為 **Mizimo/musicmap-zh**。使用
 
 請求固定開啟 thinking、`reasoning_effort: max`，單批最多 20 個目標片段、14,000 個來源字元，`max_tokens: 32768`，逾時 600 秒。段落與流派背景由本機快照產生，作為唯讀參考；不可把整段背景重複放進片段譯文。快取區分模型、檔位、提示、術語及上下文，避免拿舊 Flash／無思考輸出冒充 Pro／Max。
 
-`generated/translation-requests/<scope>/` 每個實際 API 請求各有一筆紀錄，保存安全的設定、回傳 usage、價格估算與通過格式檢查的譯文，不保存 reasoning 內文或密鑰。送出前先寫 started；缺少 usage 的失敗費用維持未知。遇到失敗不自動重試；先檢查原因和原紀錄，確定需要新的付費嘗試後才使用 `--retry-failed`。completed 紀錄可修復中斷後尚未匯出的成果，不需再付費。
+`generated/translation-requests/<scope>/` 每個實際 API 請求各有一筆紀錄，保存安全的設定、回傳 usage、價格估算與通過格式檢查的譯文，不保存 reasoning 內文或密鑰。送出前先寫 started；缺少 usage 的失敗費用維持未知。翻譯器本身不自動重試；先檢查原因和原紀錄，確定需要新的付費嘗試後才使用 `--retry-failed`。completed 紀錄可修復中斷後尚未匯出的成果，不需再付費。
+
+本次完整跟進授權另允許 [有限恢復監看器](docs/FOLLOW-THROUGH.md)：只對已知用量、HTTP 200／stop 的格式錯誤，在服務完全停止且來源、上下文、設定及首批缺失片段逐項一致時補試原批次一次。整輪持久上限為 20 次補試、同時最多 2 個；不能重置 ledger 規避。重複失敗、未知用量、認證／網路錯誤與任何不一致交回人工診斷，不自動拆批。Agent 仍須持續跟進到驗收交付，不能只留下監看器。
 
 每個分片有獨立鎖；看到殘留鎖時先核對 PID 與工作機，確定程序已結束才移除。背景正式程序不設定自動重啟；所有分片成功後才依序 merge、convert、正式 build 與瀏覽器測試。工作程序 active、簡體完成、建置完成、瀏覽器驗收通過是不同狀態，交接時清楚區分。
 
