@@ -16,7 +16,7 @@ GitHub 擁有者固定為 **Mizimo**，倉庫為 **Mizimo/musicmap-zh**。使用
 4. 英文原文需可還原；中文搜尋必須能定位原站流派。不要僅改原站英文搜尋的畫面，原搜尋程式的 `\b` 比對不支援中文。
 5. YouTube API 不存在或載入失敗時，地圖與介紹仍須運作。相容性補丁只作用在 build 產物，`generated/site/` 原始快照不得手改。
 6. 未完成翻譯只可用 `--allow-partial` 產生明確標示的開發預覽。不可調整狀態檔、複製英文假裝譯文，或關閉正式建置檢查來假報完成。
-7. `generated/conversion-status.json` 的 `sourceHash`、`simplifiedHash`、`traditionalHash`、`terminologyHash` 必須對應目前來源、簡體、繁體及術語表。簡體或术語改動後重新轉換；不得移除過期檢查來接受舊繁體。
+7. `generated/conversion-status.json` 的 `sourceHash`、`simplifiedHash`、`traditionalHash`、`terminologyHash` 必須對應目前來源、簡體、繁體及術語表。簡體或術語改動後重新轉換；不得移除過期檢查來接受舊繁體。
 
 ## 每次接手的起手式
 
@@ -84,7 +84,7 @@ npm run translate -- --language zh-Hans --shard 3/8 --limit 100
 - API 只回傳純文字 JSON。輸出經 schema／項目數／空值檢查後才快取；不得把模型輸出當 HTML 執行。
 - 完整度檢查只證明每個來源字串有譯文，不代表語意品質。每片抽查長介紹、跨標籤片段、專名、簡繁用字及圖上小字，紀錄需人工修正的項目。
 
-只修改繁體偏好時，更新術語表版本、記錄變更，再執行 `npm run convert` 即可，不需重新付費翻譯。修改簡體偏好時，現有已審阅的簡體輸出不會自動改寫；先列出受影響原文，針對性審閱、修正，必要時規劃有授權範圍的重置與重翻。不要直接清空已完成 locales、分片或整個快取後重跑全站。修正須同步回相關簡體分片，避免下一次 merge 與語言檔衝突，最後重新產生繁體。
+只修改繁體偏好時，更新術語表版本、記錄變更，再執行 `npm run convert` 即可，不需重新付費翻譯。修改簡體偏好時，現有已審閱的簡體輸出不會自動改寫；先列出受影響原文，針對性審閱、修正，必要時規劃有授權範圍的重置與重翻。不要直接清空已完成 locales、分片或整個快取後重跑全站。修正須同步回相關簡體分片，避免下一次 merge 與語言檔衝突，最後重新產生繁體。
 
 ## 協調機：收回、合併、產生網站
 
@@ -102,7 +102,7 @@ npm start
 
 缺片可合併，`npm run convert` 也可轉換目前已有的部分簡體，但不會替缺失文字補譯，`complete` 仍為 `false`。只有全部簡體完成、繁體已重新轉換且版本一致才可正式 build。
 
-轉換會寫入 `generated/locales/zh-Hant.json` 與 `generated/conversion-status.json`。後者記錄 `sourceHash`、`simplifiedHash`、`traditionalHash`、`terminologyHash`；简體、術語或來源變更後，建置必須拒絕舊轉換結果，先重跑 `npm run convert`。繁體檔是衍生產物，不要把僅存在其中的手動修訂當作永久來源，重新轉換會覆寫；長期修訂應落在術語表或經審閱的簡體來源。
+轉換會寫入 `generated/locales/zh-Hant.json` 與 `generated/conversion-status.json`。後者記錄 `sourceHash`、`simplifiedHash`、`traditionalHash`、`terminologyHash`；簡體、術語或來源變更後，建置必須拒絕舊轉換結果，先重跑 `npm run convert`。繁體檔是衍生產物，不要把僅存在其中的手動修訂當作永久來源，重新轉換會覆寫；長期修訂應落在術語表或經審閱的簡體來源。
 
 `dist/` 是交付的靜態成品。把它放在 HTTP 站點根目錄部署即可，瀏覽端不需要 API Key。本機轉換、merge 與 build 也不用 API Key。
 
