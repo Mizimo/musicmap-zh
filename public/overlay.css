@@ -1,0 +1,5 @@
+html[data-mmzh-language]:not([data-mmzh-language="en"]) body { font-family: "Noto Sans CJK TC", "Noto Sans CJK SC", "Microsoft JhengHei", sans-serif; }
+html[data-mmzh-language]:not([data-mmzh-language="en"]) #musicmap text { font-family: "Noto Sans CJK TC", "Noto Sans CJK SC", sans-serif !important; }
+html[data-mmzh-language]:not([data-mmzh-language="en"]) .description-container { line-height: 1.9; }
+#mmzh-root { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 2147483000; }
+@media (max-width: 620px) { #mmzh-root { bottom: 26px; width: calc(100% - 24px); } }

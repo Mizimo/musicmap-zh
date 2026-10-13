@@ -1,0 +1,28 @@
+{
+  "name": "musicmap-zh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Build a local pretranslated Musicmap in Simplified and Traditional Chinese with resumable DeepSeek translation shards",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "dev": "node --env-file-if-exists=.env --watch server.mjs",
+    "sync": "node scripts/sync-source.mjs",
+    "translate": "node --env-file-if-exists=.env scripts/translate.mjs",
+    "build": "node scripts/build.mjs",
+    "snapshot": "node scripts/snapshot.mjs",
+    "merge": "node scripts/merge-translations.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node test/browser.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "tar": "^7.5.22"
+  }
+}
