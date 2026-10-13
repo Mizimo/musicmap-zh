@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { extendManifest } from '../lib/benchmark-manifest.mjs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { extendManifest, writeManifestHistory } from '../lib/benchmark-manifest.mjs';
 
 const high = { id: 'gpt-6-astra-high', provider: 'codex', model: 'gpt-6-astra', effort: 'high' };
 const max = { ...high, id: 'gpt-6-astra-max', effort: 'max' };
@@ -32,4 +35,17 @@ test('append refuses changed frozen inputs or redefined old configurations', () 
     assert.throws(() => extendManifest(previous, { ...current, [key]: 'changed' }, [max], { allowAppend: true }), /Refusing resume/);
   }
   assert.throws(() => extendManifest(previous, { ...current, configurations: [{ ...high, effort: 'low' }, max] }, [max], { allowAppend: true }), /changed configuration/);
+});
+
+test('interrupted append accepts identical history without overwriting differing history', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'musicmap-manifest-history-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, 'history.json');
+  const snapshot = JSON.stringify(previous) + '\n';
+  await writeManifestHistory(file, snapshot);
+  await writeManifestHistory(file, snapshot);
+  assert.equal(await readFile(file, 'utf8'), snapshot);
+  await writeFile(file, 'unexpected existing history');
+  await assert.rejects(writeManifestHistory(file, snapshot), /refusing to overwrite/);
+  assert.equal(await readFile(file, 'utf8'), 'unexpected existing history');
 });

@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {deepseekRequest,codexRequest} from '../lib/benchmark-transports.mjs';
 import {normalizeUsage,calculateCost,deepseekBand} from '../lib/benchmark-cost.mjs';
-import {extendManifest} from '../lib/benchmark-manifest.mjs';
+import {extendManifest,writeManifestHistory} from '../lib/benchmark-manifest.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const args=process.argv.slice(2);
 function option(name){const i=args.indexOf(name);if(i<0)return undefined;if(!args[i+1]||args[i+1].startsWith('--'))throw new Error(`Missing ${name} value`);return args[i+1];}
@@ -45,7 +45,7 @@ try{
     const extension=extendManifest(previous,manifest,selected,{allowAppend:args.includes('--append-configurations')});
     if(extension.changed){
       await mkdir(path.join(runDir,'manifest-history'),{recursive:true});
-      await writeFile(path.join(runDir,extension.previousFile),extension.previousText,{mode:0o600,flag:'wx'});
+      await writeManifestHistory(path.join(runDir,extension.previousFile),extension.previousText);
       await atomic(manifestPath,extension.manifest);
     }
   }
