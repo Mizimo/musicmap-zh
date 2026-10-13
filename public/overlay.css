@@ -14,7 +14,33 @@ html[data-mmzh-language] #musicmap text.mmzh-map-original { font-family: "Libera
 #mmzh-root { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 2147483000; }
 @media (max-width: 620px) {
   #mmzh-root { bottom: 26px; width: calc(100% - 24px); }
-  #supergenres-side-pane { width: calc(100vw - 50px); }
+  .small-side-pane-container,
+  #supergenre-side-pane,
+  #genre-side-pane { width: calc(100vw - 50px); }
+  /* Keep the playlist/genre-list handle and links above the fixed reading toolbar. */
+  #supergenre-side-pane,
+  #genre-side-pane { height: calc(100% - 112px); }
   #supergenres-side-pane .small-side-pane-content { padding-inline: 22px; }
   #supergenres-side-pane .small-side-pane-title { font-size: 32px; }
+  .small-side-pane-container:not(.left-side-pane-open) { transform: translateX(-100%); }
+  /* The original panes use fixed desktop widths and offsets. Keep the 50px navigation strip accessible. */
+  #supergenre-side-pane.supergenre-side-pane-open { transform: translateX(50px) !important; z-index: 3; }
+  #genre-side-pane:not(.right-side-pane-visible) { transform: translateX(100%); }
+  #genre-side-pane.right-side-pane-visible { z-index: 3; }
+  #supergenre-side-pane-title,
+  #genre-side-pane-title { flex-shrink: 0; }
+  #supergenre-side-pane-genre-name { font-size: 24px; padding-inline: 36px; overflow-wrap: anywhere; }
+  #supergenre-side-pane-title .icon { left: 14px; }
+  #right-side-pane-genre-name { padding-inline: 34px; overflow-wrap: anywhere; }
+  #right-side-pane-genre-tags { margin: 20px 22px 6px; overflow-wrap: anywhere; }
+  #supergenre-side-pane-content .description-container,
+  #right-side-pane-content .description-container,
+  #supergenre-side-pane-content .side-pane-sub-pane-content,
+  #right-side-pane-content .side-pane-sub-pane-content { margin-right: 12px; padding-left: 22px; padding-right: 10px; overflow-wrap: anywhere; }
+  #right-side-pane-toggle-button-container { top: 8px; margin-top: 0; left: -32px; }
+  #genre-side-pane.right-side-pane-visible #right-side-pane-toggle-button-container { left: 0; }
+  #right-side-pane-toggle-button { width: 32px; height: 44px; }
+  #supergenre-side-pane .side-pane-sub-pane-container:not(.side-pane-sub-pane-container-open) .side-pane-sub-pane-content,
+  #genre-side-pane .side-pane-sub-pane-container:not(.side-pane-sub-pane-container-open) .side-pane-sub-pane-content { visibility: hidden; }
+  .tooltip { pointer-events: none; }
 }

@@ -46,6 +46,29 @@ document.body.append(host);
 const $ = selector => ui.querySelector(selector);
 const copy = (hans, hant, en) => language === 'en' ? en : language === 'zh-Hans' ? hans : hant;
 
+// The desktop site can show multiple adjacent panes. A phone has room for one:
+// use the original close controls before its original navigation handler runs.
+const narrowScreen = matchMedia('(max-width: 620px)');
+let switchingMobilePane = false;
+document.addEventListener('click', (event) => {
+  if (!narrowScreen.matches || switchingMobilePane || !(event.target instanceof Element)) return;
+  const target = event.target;
+  const code = target.closest('[data-code]')?.getAttribute('data-code');
+  const family = code && [...document.querySelectorAll('#supergenres-list a[data-code]')].some(link => link.dataset.code === code);
+  const genre = code && [...document.querySelectorAll('#main-genres text[data-code]')].some(label => label.dataset.code === code);
+  const rightPane = document.getElementById('genre-side-pane');
+  const familyPane = document.getElementById('supergenre-side-pane');
+  const openingGenre = genre || target.closest('#genres-navigate-button') || (target.closest('#right-side-pane-toggle-button') && !rightPane?.classList.contains('right-side-pane-visible'));
+  const openingMenu = target.closest('#sidebar-wrapper [id$="-toggle-button"]');
+  if (!family && !openingGenre && !openingMenu) return;
+  switchingMobilePane = true;
+  try {
+    if ((family || openingMenu) && rightPane?.classList.contains('right-side-pane-visible')) document.getElementById('right-side-pane-toggle-button')?.click();
+    if ((openingGenre || openingMenu) && familyPane?.classList.contains('supergenre-side-pane-open')) familyPane.querySelector('.close')?.click();
+    if (family || openingGenre) document.querySelector('.small-side-pane-container.left-side-pane-open .left-side-pane-close-button')?.click();
+  } finally { switchingMobilePane = false; }
+}, true);
+
 function renderUI() {
   document.documentElement.dataset.mmzhLanguage = language;
   document.documentElement.lang = language;
