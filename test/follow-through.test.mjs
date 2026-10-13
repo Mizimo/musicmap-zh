@@ -7,16 +7,17 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeUsage } from '../lib/benchmark-cost.mjs';
 import { loadTranslationContexts } from '../lib/translation-context.mjs';
-import { TERMINOLOGY_HASH } from '../lib/terminology.mjs';
-import { TRANSLATION_PROMPT_TEMPLATE_HASH } from '../lib/translator.mjs';
+import { SIMPLIFIED_TERMINOLOGY_HASH, TERMINOLOGY_HASH } from '../lib/terminology.mjs';
+import { TRANSLATION_PROMPT_TEMPLATE_HASH, TRANSLATION_PROMPT_VERSION } from '../lib/translator.mjs';
 import { atomicJson, shardForText } from '../scripts/translate.mjs';
 import { FROZEN_FILES, prepareProduction } from '../scripts/production.mjs';
-import { acquireFollowThroughLock, planRecovery, readFollowThroughStatus, RECOVERY_POLICY, runFollowThrough, unresolvedRecords } from '../scripts/follow-through.mjs';
+import { acknowledgeManualRecovery, acquireFollowThroughLock, planRecovery, readFollowThroughStatus, RECOVERY_POLICY, runFollowThrough, unresolvedRecords, validateManualResolution } from '../scripts/follow-through.mjs';
 
 const realRoot = fileURLToPath(new URL('../', import.meta.url));
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const json = async (file) => JSON.parse(await readFile(file, 'utf8'));
 const recordFile = (rootDir, index, id) => join(rootDir, `generated/translation-requests/zh-Hans-${index}-of-8/${id}.json`);
+const stopped = async () => ({ state: 'failed', pid: 0 });
 
 async function fixture(t, failedShards = [1]) {
   const rootDir = await mkdtemp(join(tmpdir(), 'musicmap-follow-through-'));
@@ -273,4 +274,161 @@ test('an independently resumed service is observed without stopping or starting 
   assert.equal(result.restarts[0].state, 'already-active');
   assert.equal(result.attempts[0].state, 'completed');
   assert.equal(result.state, 'interrupted');
+});
+
+async function manuallyRecoveredFixture(t) {
+  const input = await fixture(t, [1, 2, 3, 4, 5]);
+  for (const records of Object.values(input.recordsByShard)) for (const record of records) {
+    Object.assign(record, { startedAt: '2026-10-13T00:00:00.000Z', finishedAt: '2026-10-13T00:00:01.000Z',
+      promptHash: hash('original prompt'), promptVersion: TRANSLATION_PROMPT_VERSION,
+      promptTemplateHash: TRANSLATION_PROMPT_TEMPLATE_HASH, terminologyHash: SIMPLIFIED_TERMINOLOGY_HASH });
+  }
+  const candidates = planRecovery(input);
+  for (const candidate of candidates) {
+    const index = candidate.index;
+    const original = input.recordsByShard[index][0];
+    const retry = { ...original, requestId: randomUUID(), reviewedPreviousRequestIds: [original.requestId],
+      startedAt: '2026-10-13T00:00:03.000Z', finishedAt: '2026-10-13T00:00:04.000Z',
+      ...(index === 5 ? {} : { type: 'completed', errorCode: null, translations: original.textHashes.map(() => '自动补试译文') }) };
+    input.recordsByShard[index].push(retry);
+    const entry = { ...candidate, state: index === 5 ? 'needs-review' : 'completed', reservedAt: '2026-10-13T00:00:02.000Z',
+      finishedAt: '2026-10-13T00:00:05.000Z', exitCode: index === 5 ? 1 : 0, newRequestIds: [retry.requestId],
+      ...(index === 5 ? {} : { completedRequestId: retry.requestId, completedRecordHash: hash(JSON.stringify(retry)) }) };
+    input.ledger.attempts.push(entry);
+    if (index === 5) {
+      for (let half = 0; half < 2; half += 1) {
+        const textHashes = original.textHashes.slice(half * 10, half * 10 + 10);
+        const texts = textHashes.map((textHash) => input.source.find((text) => hash(text) === textHash));
+        input.recordsByShard[index].push({ ...original, requestId: randomUUID(), type: 'completed', errorCode: null,
+          startedAt: `2026-10-13T00:00:${10 + half * 2}.000Z`, finishedAt: `2026-10-13T00:00:${11 + half * 2}.000Z`,
+          sourceCount: 10, sourceHash: hash(JSON.stringify(texts)), textHashes, contextHashes: texts.map((text) => hash(input.contexts.get(text) ?? '')),
+          promptHash: hash(`manual half ${half}`), translations: texts.map((text) => `人工拆批译文 ${text}`),
+          ...(half === 0 ? { reviewedPreviousRequestIds: [retry.requestId] } : {}) });
+      }
+    }
+    for (const record of input.recordsByShard[index]) {
+      await atomicJson(recordFile(input.rootDir, index, record.requestId), record);
+      if (record.type === 'completed') record.textHashes.forEach((value, offset) => {
+        input.shards[index].translations[input.source.find((text) => hash(text) === value)] = record.translations[offset];
+      });
+    }
+    await atomicJson(join(input.rootDir, `generated/shards/zh-Hans-${index}-of-8.json`), input.shards[index]);
+  }
+  Object.assign(input.ledger, { state: 'needs-review', errorCode: 'RETRY_FAILED', reservedRequests: 5 });
+  await atomicJson(join(input.rootDir, 'generated/production/follow-through.json'), input.ledger);
+  return input;
+}
+
+const acknowledge = (input, options = {}) => acknowledgeManualRecovery({ rootDir: input.rootDir,
+  failedRequestId: input.ledger.attempts.at(-1).failedRequestId, queryService: stopped, queryMonitor: stopped, ...options });
+
+test('manual acknowledgement proves 10+10 outputs, retains the failed fifth attempt and all automatic reservations', async (t) => {
+  const input = await manuallyRecoveredFixture(t);
+  const before = structuredClone(input.ledger.attempts.at(-1));
+  const originals = await Promise.all(input.recordsByShard[5].map((record) => readFile(recordFile(input.rootDir, 5, record.requestId), 'utf8')));
+  const ledger = await acknowledge(input);
+  const entry = ledger.attempts.at(-1);
+  assert.equal(ledger.state, 'monitoring');
+  assert.equal(ledger.reservedRequests, 5);
+  assert.equal(ledger.attempts.length, 5);
+  const { manualResolution, manualResolutionHash, ...retained } = entry;
+  assert.deepEqual(retained, before);
+  assert.equal(entry.state, 'needs-review');
+  assert.equal(manualResolution.completedRecords.length, 2);
+  assert.equal(manualResolution.failedRetryRecords.length, 1);
+  assert.equal(manualResolution.previousLedgerErrorCode, 'RETRY_FAILED');
+  assert.equal(manualResolutionHash, hash(JSON.stringify(manualResolution)));
+  assert.deepEqual(await Promise.all(input.recordsByShard[5].map((record) => readFile(recordFile(input.rootDir, 5, record.requestId), 'utf8'))), originals);
+  validateManualResolution(entry, input);
+  assert.throws(() => planRecovery({ ...input, ledger }), { code: 'NO_ELIGIBLE_FAILURE' });
+  ledger.reservedRequests = 0;
+  assert.throws(() => planRecovery({ ...input, ledger }), { code: 'LEDGER_MISMATCH' });
+});
+
+test('manual acknowledgement refuses incomplete, duplicate, changed, unknown-cost or unreviewed evidence without writing the ledger', async (t) => {
+  for (const scenario of ['original', 'retry-hash', 'missing-half', 'duplicate', 'identity', 'context', 'usage', 'unreviewed', 'unresolved-other', 'saved-output', 'early-output']) {
+    await t.test(scenario, async (t) => {
+      const input = await manuallyRecoveredFixture(t);
+      const entry = input.ledger.attempts.at(-1);
+      const records = input.recordsByShard[5];
+      const first = records[2];
+      let changed = first;
+      if (scenario === 'original') { changed = records[0]; changed.finishReason = 'length'; }
+      if (scenario === 'retry-hash') {
+        entry.newRequestRecords = [{ requestId: records[1].requestId, recordHash: hash('different retry') }];
+        await atomicJson(join(input.rootDir, 'generated/production/follow-through.json'), input.ledger);
+      }
+      if (scenario === 'missing-half') await rm(recordFile(input.rootDir, 5, records[3].requestId));
+      if (scenario === 'duplicate') {
+        const duplicate = { ...first, requestId: randomUUID() };
+        await atomicJson(recordFile(input.rootDir, 5, duplicate.requestId), duplicate);
+      }
+      if (scenario === 'identity') first.identityHash = hash('different identity');
+      if (scenario === 'context') first.contextHashes[0] = hash('changed context');
+      if (scenario === 'usage') first.rawUsage = null;
+      if (scenario === 'unreviewed') delete first.reviewedPreviousRequestIds;
+      if (scenario === 'unresolved-other') {
+        const other = { ...records[0], requestId: randomUUID() };
+        await atomicJson(recordFile(input.rootDir, 6, other.requestId), other);
+      }
+      if (scenario === 'saved-output') {
+        const text = input.source.find((value) => hash(value) === first.textHashes[0]);
+        input.shards[5].translations[text] = 'different saved output';
+        await atomicJson(join(input.rootDir, 'generated/shards/zh-Hans-5-of-8.json'), input.shards[5]);
+      }
+      if (scenario === 'early-output') first.startedAt = records[0].startedAt;
+      await atomicJson(recordFile(input.rootDir, 5, changed.requestId), changed);
+      const before = await readFile(join(input.rootDir, 'generated/production/follow-through.json'), 'utf8');
+      await assert.rejects(acknowledge(input));
+      assert.equal(await readFile(join(input.rootDir, 'generated/production/follow-through.json'), 'utf8'), before);
+    });
+  }
+});
+
+test('manual acknowledgement requires both stopped services and empty coordination and shard locks', async (t) => {
+  const input = await manuallyRecoveredFixture(t);
+  const before = await readFile(join(input.rootDir, 'generated/production/follow-through.json'), 'utf8');
+  await assert.rejects(acknowledge(input, { queryService: async () => ({ state: 'active', pid: 123 }) }), { code: 'SERVICE_BECAME_ACTIVE' });
+  await assert.rejects(acknowledge(input, { queryMonitor: async () => ({ state: 'active', pid: 123 }) }), { code: 'SERVICE_BECAME_ACTIVE' });
+  let queries = 0;
+  await assert.rejects(acknowledge(input, { queryService: async () => (++queries === 3 ? { state: 'active', pid: 123 } : { state: 'failed', pid: 0 }) }), { code: 'SERVICE_BECAME_ACTIVE' });
+  for (const [path, code] of [['generated/production/follow-through-lock', 'SUPERVISOR_LOCKED'], ['generated/production/lock', 'PRODUCTION_LOCKED'], ['generated/translation-locks/shard', 'SHARD_LOCKED']]) {
+    await mkdir(join(input.rootDir, path), { recursive: true });
+    await assert.rejects(acknowledge(input), { code });
+    await rm(join(input.rootDir, path), { recursive: true });
+  }
+  await assert.rejects(acknowledge(input, { failedRequestId: input.recordsByShard[5][1].requestId }), { code: 'MANUAL_TARGET_INVALID' });
+  assert.equal(await readFile(join(input.rootDir, 'generated/production/follow-through.json'), 'utf8'), before);
+});
+
+test('every later monitor iteration revalidates manual journal hashes and saved translations without model calls', async (t) => {
+  for (const scenario of ['journal', 'shard', 'resolution']) await t.test(scenario, async (t) => {
+    const input = await manuallyRecoveredFixture(t);
+    const ledger = await acknowledge(input);
+    if (scenario === 'resolution') {
+      ledger.attempts.at(-1).manualResolution.completedRecords.pop();
+      await atomicJson(join(input.rootDir, 'generated/production/follow-through.json'), ledger);
+    }
+    let calls = 0;
+    let iterations = 0;
+    const result = await runFollowThrough({ rootDir: input.rootDir, manageSignals: false, log: () => {},
+      queryService: async () => ({ state: 'active', pid: 123 }),
+      runChild: async () => { calls += 1; }, resumeService: async () => { calls += 1; },
+      sleep: async () => {
+        assert.equal(++iterations, 1);
+        const record = input.recordsByShard[5][2];
+        if (scenario === 'journal') {
+          record.translations[0] = 'changed';
+          await atomicJson(recordFile(input.rootDir, 5, record.requestId), record);
+        } else {
+          const text = input.source.find((value) => hash(value) === record.textHashes[0]);
+          input.shards[5].translations[text] = 'changed';
+          await atomicJson(join(input.rootDir, 'generated/shards/zh-Hans-5-of-8.json'), input.shards[5]);
+        }
+      } });
+    assert.equal(result.state, 'needs-review');
+    assert.equal(result.reservedRequests, 5);
+    assert.equal(result.errorCode, { journal: 'JOURNAL_TAMPERED', shard: 'MANUAL_OUTPUT_MISMATCH', resolution: 'MANUAL_RESOLUTION_CHANGED' }[scenario]);
+    assert.equal(calls, 0);
+  });
 });

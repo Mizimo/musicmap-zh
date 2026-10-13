@@ -9,8 +9,8 @@ import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { normalizeUsage } from '../lib/benchmark-cost.mjs';
 import { loadTranslationContexts } from '../lib/translation-context.mjs';
-import { TERMINOLOGY_HASH } from '../lib/terminology.mjs';
-import { TRANSLATION_PROMPT_TEMPLATE_HASH } from '../lib/translator.mjs';
+import { SIMPLIFIED_TERMINOLOGY_HASH, TERMINOLOGY_HASH } from '../lib/terminology.mjs';
+import { TRANSLATION_PROMPT_TEMPLATE_HASH, TRANSLATION_PROMPT_VERSION } from '../lib/translator.mjs';
 import { atomicJson, makeBatches, PROJECT_ROOT, shardForText, validateShardWrapper } from './translate.mjs';
 import { acquireProductionLock, readProductionStatus, runChildProcess, runWorkerPool, signalActiveChildren, validateFrozenManifest } from './production.mjs';
 
@@ -41,10 +41,10 @@ export async function acquireFollowThroughLock(rootDir) {
   return () => rm(lock, { recursive: true });
 }
 
-export async function queryTranslationService() {
+async function queryServiceUnit(unit) {
   let stdout;
   try {
-    ({ stdout } = await promisify(execFile)('systemctl', ['--user', 'show', RECOVERY_POLICY.unit, '--property=LoadState,ActiveState,SubState,MainPID'], { timeout: 10000, maxBuffer: 16384 }));
+    ({ stdout } = await promisify(execFile)('systemctl', ['--user', 'show', unit, '--property=LoadState,ActiveState,SubState,MainPID'], { timeout: 10000, maxBuffer: 16384 }));
   } catch (error) {
     // A successful transient service may already have been unloaded by systemd.
     if (typeof error.stdout === 'string' && error.stdout.includes('LoadState=not-found')) stdout = error.stdout;
@@ -55,6 +55,9 @@ export async function queryTranslationService() {
   if (fields.LoadState !== 'loaded' || !['active', 'activating', 'deactivating', 'inactive', 'failed'].includes(fields.ActiveState)) review('SERVICE_STATE_UNKNOWN', 'The existing translation service is missing or has an unsupported state.');
   return { state: fields.ActiveState, substate: fields.SubState, pid: Number(fields.MainPID) };
 }
+
+export const queryTranslationService = () => queryServiceUnit(RECOVERY_POLICY.unit);
+export const queryFollowThroughService = () => queryServiceUnit('musicmap-follow-through.service');
 
 export async function startTranslationService() {
   // `start` resumes a failed/inactive unit and is a no-op if another operator already started it.
@@ -128,21 +131,122 @@ function hasKnownUsage(record) {
     usage.input + usage.output === usage.total && usage.reasoning <= usage.output && usage.cacheRead + usage.cacheWrite <= usage.input;
 }
 
+const attemptSnapshot = ({ manualResolution, manualResolutionHash, ...entry }) => entry;
+const recordEvidence = (record) => ({ requestId: record.requestId, recordHash: hash(JSON.stringify(record)) });
+const resolvedAttempt = (entry) => entry.state === 'completed' || (entry.state === 'needs-review' && entry.manualResolution);
+const timestamp = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? Date.parse(value) : NaN;
+
+function validateManualRecord(record, { identity, manifest, source, contexts }, index) {
+  if (!record || !same(record.identity, identity) || record.identityHash !== hash(JSON.stringify(identity)) ||
+      record.model !== manifest.config.model || record.reasoningEffort !== manifest.config.reasoningEffort ||
+      record.maxTokens !== manifest.config.maxTokens || record.timeoutMs !== manifest.config.timeoutMs || record.language !== 'zh-Hans' ||
+      (record.returnedModel !== null && record.returnedModel !== manifest.config.model) ||
+      (record.returnedEffort !== null && record.returnedEffort !== manifest.config.reasoningEffort) ||
+      record.promptVersion !== TRANSLATION_PROMPT_VERSION || record.promptTemplateHash !== TRANSLATION_PROMPT_TEMPLATE_HASH ||
+      record.terminologyHash !== SIMPLIFIED_TERMINOLOGY_HASH || !validHash(record.promptHash)) {
+    review('CONFIGURATION_MISMATCH', 'Manual recovery evidence does not match the frozen translation configuration.');
+  }
+  if (!hasKnownUsage(record)) review('UNKNOWN_USAGE', 'Manual recovery requires complete, consistent usage for every evidenced request.');
+  if (record.httpStatus !== 200 || record.finishReason !== 'stop' ||
+      !(timestamp(record.startedAt) <= timestamp(record.finishedAt))) review('INVALID_MANUAL_EVIDENCE', 'Manual recovery evidence has an invalid response or time interval.');
+  const byHash = new Map(source.map((text) => [hash(text), text]));
+  const texts = record.textHashes?.map((value) => byHash.get(value));
+  if (!Array.isArray(texts) || !Number.isSafeInteger(record.sourceCount) || record.sourceCount < 1 || record.sourceCount > 20 ||
+      texts.length !== record.sourceCount || new Set(record.textHashes).size !== texts.length ||
+      texts.some((text) => text === undefined || shardForText(text, 8) !== index) ||
+      hash(JSON.stringify(texts)) !== record.sourceHash ||
+      !same(texts.map((text) => hash(contexts.get(text) ?? '')), record.contextHashes)) {
+    review('INVALID_MANUAL_EVIDENCE', 'Manual recovery evidence has changed source fragments or context.');
+  }
+  return texts;
+}
+
+/** Recheck immutable evidence and saved translations on every later monitor iteration. */
+export function validateManualResolution(entry, inputs) {
+  const resolution = entry.manualResolution;
+  if (entry.state !== 'needs-review' || !resolution || resolution.schemaVersion !== 1 ||
+      entry.manualResolutionHash !== hash(JSON.stringify(resolution)) ||
+      resolution.attemptHash !== hash(JSON.stringify(attemptSnapshot(entry))) ||
+      resolution.manifestHash !== hash(JSON.stringify(inputs.manifest)) || resolution.failedRequestId !== entry.failedRequestId ||
+      !Number.isFinite(timestamp(resolution.acknowledgedAt)) ||
+      !Array.isArray(resolution.failedRetryRecords) || resolution.failedRetryRecords.length !== 1 ||
+      !Array.isArray(resolution.completedRecords) || !resolution.completedRecords.length) {
+    review('MANUAL_RESOLUTION_CHANGED', 'The manual resolution or its original reservation has changed.');
+  }
+  const records = inputs.recordsByShard[entry.index] ?? [];
+  const getEvidence = (evidence) => {
+    const record = records.find((item) => item.requestId === evidence?.requestId);
+    if (!record || hash(JSON.stringify(record)) !== evidence.recordHash) review('JOURNAL_TAMPERED', 'A manual recovery journal record changed or disappeared.');
+    return record;
+  };
+  const original = getEvidence({ requestId: entry.failedRequestId, recordHash: entry.failedRecordHash });
+  validateManualRecord(original, inputs, entry.index);
+  if (original.type !== 'failed' || original.errorCode !== 'INVALID_TRANSLATION' ||
+      entry.identityHash !== original.identityHash || entry.sourceHash !== original.sourceHash ||
+      entry.sourceCount !== original.sourceCount || !same(entry.textHashes, original.textHashes) ||
+      entry.batchKey !== hash(`${original.identityHash}:${original.sourceHash}`) ||
+      !(timestamp(original.finishedAt) <= timestamp(entry.reservedAt))) review('INVALID_MANUAL_EVIDENCE', 'The original failed batch does not match its reservation.');
+  const retry = getEvidence(resolution.failedRetryRecords[0]);
+  validateManualRecord(retry, inputs, entry.index);
+  if (!same(entry.newRequestIds, [retry.requestId]) ||
+      (entry.newRequestRecords && !same(entry.newRequestRecords, resolution.failedRetryRecords)) ||
+      retry.type !== 'failed' || retry.errorCode !== 'INVALID_TRANSLATION' || retry.sourceHash !== original.sourceHash ||
+      !same(retry.textHashes, original.textHashes) || retry.promptHash !== original.promptHash ||
+      !retry.reviewedPreviousRequestIds?.includes(original.requestId) ||
+      !(timestamp(retry.startedAt) >= timestamp(entry.reservedAt) && timestamp(retry.finishedAt) <= timestamp(entry.finishedAt))) {
+    review('INVALID_MANUAL_EVIDENCE', 'The failed automatic retry does not match the retained reservation.');
+  }
+  try { validateShardWrapper(inputs.shards[entry.index], { sourceHash: inputs.manifest.frozen.sourceHash, source: inputs.source, language: 'zh-Hans', shard: { index: entry.index, count: 8 } }); }
+  catch { review('SHARD_MISMATCH', 'The manually recovered shard no longer matches its frozen source assignment.'); }
+  const covered = new Set();
+  const ids = new Set();
+  let reviewedRetry = false;
+  for (const evidence of resolution.completedRecords) {
+    const record = getEvidence(evidence);
+    const texts = validateManualRecord(record, inputs, entry.index);
+    if (ids.has(record.requestId) || entry.priorRequestIds?.includes(record.requestId) || record.type !== 'completed' || record.errorCode !== null ||
+        !(timestamp(record.startedAt) >= timestamp(entry.finishedAt) && timestamp(record.finishedAt) <= timestamp(resolution.acknowledgedAt)) ||
+        !Array.isArray(record.translations) || record.translations.length !== texts.length) {
+      review('INVALID_MANUAL_EVIDENCE', 'Manual output must come from distinct, subsequent completed requests.');
+    }
+    ids.add(record.requestId);
+    reviewedRetry ||= record.reviewedPreviousRequestIds?.includes(retry.requestId) ?? false;
+    texts.forEach((text, offset) => {
+      const textHash = record.textHashes[offset];
+      if (!original.textHashes.includes(textHash) || covered.has(textHash)) review('MANUAL_COVERAGE_MISMATCH', 'Manual output must cover each original fragment exactly once.');
+      if (typeof record.translations[offset] !== 'string' || !record.translations[offset].trim() ||
+          inputs.shards[entry.index].translations[text] !== record.translations[offset]) review('MANUAL_OUTPUT_MISMATCH', 'Manual output does not match the saved shard translation.');
+      covered.add(textHash);
+    });
+  }
+  if (!reviewedRetry || covered.size !== original.sourceCount) review('MANUAL_COVERAGE_MISMATCH', 'The original failed batch lacks complete, explicitly reviewed manual output.');
+  // Validate all review references, without suppressing later unrelated failures.
+  unresolvedRecords(records);
+}
+
+function validateRecoveryHistory(inputs, ledger) {
+  for (const entry of ledger.attempts) {
+    const records = inputs.recordsByShard[entry.index] ?? [];
+    const original = records.find((record) => record.requestId === entry.failedRequestId);
+    if (!original || hash(JSON.stringify(original)) !== entry.failedRecordHash) review('JOURNAL_TAMPERED', 'An already reviewed failed request changed or disappeared.');
+    if (entry.manualResolution || entry.manualResolutionHash) validateManualResolution(entry, inputs);
+    else if (entry.state === 'completed') {
+      const completed = records.find((record) => record.requestId === entry.completedRequestId);
+      if (!completed || hash(JSON.stringify(completed)) !== entry.completedRecordHash) review('JOURNAL_TAMPERED', 'A recorded successful bounded retry changed or disappeared.');
+    }
+  }
+}
+
 /** Pure policy gate: select only one known-cost schema-failure retry for the unchanged first missing batch. */
 export function planRecovery({ recordsByShard, manifest, source, shards, identity, contexts, ledger }) {
   validateLedger(ledger, manifest);
-  if (ledger.state === 'needs-review' || ledger.attempts.some((attempt) => attempt.state !== 'completed')) review('PRIOR_RETRY_UNRESOLVED', 'A prior recovery attempt was interrupted or needs review; its reserved request budget is retained.');
+  if (ledger.state === 'needs-review' || ledger.attempts.some((attempt) => !resolvedAttempt(attempt))) review('PRIOR_RETRY_UNRESOLVED', 'A prior recovery attempt was interrupted or needs review; its reserved request budget is retained.');
   if (ledger.reservedRequests >= RECOVERY_POLICY.maxRequests) review('RECOVERY_CAP', 'The persistent twenty-request recovery cap has been reached.');
+  validateRecoveryHistory({ recordsByShard, manifest, source, shards, identity, contexts }, ledger);
   const expectedIdentityHash = hash(JSON.stringify(identity));
   const candidates = [];
   for (let index = 1; index <= 8; index += 1) {
     const records = recordsByShard[index] ?? [];
-    for (const attempt of ledger.attempts.filter((item) => item.index === index)) {
-      const original = records.find((record) => record.requestId === attempt.failedRequestId);
-      if (!original || hash(JSON.stringify(original)) !== attempt.failedRecordHash) review('JOURNAL_TAMPERED', 'An already reviewed failed request changed or disappeared.');
-      const completed = records.find((record) => record.requestId === attempt.completedRequestId);
-      if (attempt.state === 'completed' && (!completed || hash(JSON.stringify(completed)) !== attempt.completedRecordHash)) review('JOURNAL_TAMPERED', 'A recorded successful bounded retry changed or disappeared.');
-    }
     const unresolved = unresolvedRecords(records);
     if (unresolved.length > 1) review('MULTIPLE_UNRESOLVED', 'A shard has more than one unresolved request.');
     if (!unresolved.length) continue;
@@ -202,6 +306,61 @@ async function recoveryInputs(rootDir, manifest) {
   return { recordsByShard: await readRecoveryRecords(rootDir), manifest, source, shards, identity, contexts };
 }
 
+/** Local acknowledgement only: never invokes a model, child translator, or service start. */
+export async function acknowledgeManualRecovery({ rootDir = PROJECT_ROOT, failedRequestId,
+  queryService = queryTranslationService, queryMonitor = queryFollowThroughService } = {}) {
+  const release = await acquireFollowThroughLock(rootDir);
+  try {
+    const requireStopped = async () => {
+      for (const service of [await queryService(), await queryMonitor()]) {
+        if (!['inactive', 'failed', 'missing'].includes(service.state) || service.pid !== 0) review('SERVICE_BECAME_ACTIVE', 'Both translation and follow-through services must be stopped for manual acknowledgement.');
+      }
+      await requireNoShardLocks(rootDir);
+    };
+    await requireStopped();
+    const releaseProduction = await acquireProductionLock(rootDir);
+    try {
+      await requireStopped();
+      const manifest = await json(join(base(rootDir), 'manifest.json'));
+      const ledger = await json(ledgerPath(rootDir));
+      validateLedger(ledger, manifest);
+      const entry = ledger.attempts.find((item) => item.failedRequestId === failedRequestId);
+      if (ledger.state !== 'needs-review' || !entry || entry.state !== 'needs-review' || entry.manualResolution ||
+          !Array.isArray(entry.newRequestIds) || entry.newRequestIds.length !== 1 ||
+          ledger.attempts.some((item) => item !== entry && !resolvedAttempt(item))) {
+        review('MANUAL_TARGET_INVALID', 'Supply the original failedRequestId of the sole unresolved automatic retry; existing reservations are retained.');
+      }
+      const inputs = await recoveryInputs(rootDir, manifest);
+      const records = inputs.recordsByShard[entry.index];
+      const retry = records.find((record) => record.requestId === entry.newRequestIds[0]);
+      if (!retry) review('JOURNAL_TAMPERED', 'The failed automatic retry journal is missing.');
+      for (const group of Object.values(inputs.recordsByShard)) {
+        if (unresolvedRecords(group).length) review('UNRESOLVED_JOURNAL', 'All shard journals must be resolved before manual acknowledgement.');
+        if (group.some((record) => !hasKnownUsage(record))) review('UNKNOWN_USAGE', 'Every recorded request must have known, consistent usage before manual acknowledgement.');
+      }
+      const completed = records.filter((record) => record.type === 'completed' && record.textHashes?.some((value) => entry.textHashes.includes(value)));
+      entry.manualResolution = { schemaVersion: 1, acknowledgedAt: now(), failedRequestId,
+        attemptHash: hash(JSON.stringify(attemptSnapshot(entry))), manifestHash: ledger.manifestHash,
+        previousLedgerErrorCode: ledger.errorCode ?? null,
+        failedRetryRecords: [recordEvidence(retry)], completedRecords: completed.map(recordEvidence) };
+      entry.manualResolutionHash = hash(JSON.stringify(entry.manualResolution));
+      validateRecoveryHistory(inputs, ledger);
+      // Re-read all evidence while holding both coordination locks before the only ledger write.
+      const confirmed = await recoveryInputs(rootDir, manifest);
+      validateRecoveryHistory(confirmed, ledger);
+      for (const group of Object.values(confirmed.recordsByShard)) {
+        if (unresolvedRecords(group).length) review('UNRESOLVED_JOURNAL', 'A new unresolved request appeared during acknowledgement.');
+        if (group.some((record) => !hasKnownUsage(record))) review('UNKNOWN_USAGE', 'Request usage changed during acknowledgement.');
+      }
+      await requireStopped();
+      ledger.state = 'monitoring'; ledger.updatedAt = now();
+      delete ledger.errorCode; delete ledger.finishedAt;
+      await atomicJson(ledgerPath(rootDir), ledger);
+      return ledger;
+    } finally { await releaseProduction(); }
+  } finally { await release(); }
+}
+
 export async function readFollowThroughStatus({ rootDir = PROJECT_ROOT } = {}) {
   return { recovery: await json(ledgerPath(rootDir), true) ?? { state: 'not-started', reservedRequests: 0, policy: RECOVERY_POLICY }, production: await readProductionStatus({ rootDir }) };
 }
@@ -232,9 +391,10 @@ export async function runFollowThrough({ rootDir = PROJECT_ROOT, queryService = 
       await persist();
     }
     validateLedger(ledger, manifest);
-    if (ledger.state === 'needs-review' || ledger.attempts.some((attempt) => attempt.state !== 'completed')) review('PRIOR_RETRY_UNRESOLVED', 'A previous bounded retry remains unresolved. No new paid request was started.');
+    if (ledger.state === 'needs-review' || ledger.attempts.some((attempt) => !resolvedAttempt(attempt))) review('PRIOR_RETRY_UNRESOLVED', 'A previous bounded retry remains unresolved. No new paid request was started.');
     while (!controller.signal.aborted) {
       await validateFrozenManifest(manifest, { rootDir });
+      if (ledger.attempts.some((entry) => entry.manualResolution || entry.manualResolutionHash)) validateRecoveryHistory(await recoveryInputs(rootDir, manifest), ledger);
       const service = await queryService();
       const production = await readProductionStatus({ rootDir });
       log(JSON.stringify({ at: now(), service: service.state, production: production.state, translated: production.translated, total: production.total, reservedRecoveryRequests: ledger.reservedRequests }));
@@ -296,6 +456,7 @@ export async function runFollowThrough({ rootDir = PROJECT_ROOT, queryService = 
               candidate.textHashes.every((textHash, offset) => typeof record.translations[offset] === 'string' && record.translations[offset].trim() && wrapper.translations?.[byHash.get(textHash)] === record.translations[offset]);
             Object.assign(entry, { state: success ? 'completed' : controller.signal.aborted ? 'interrupted' : 'needs-review', finishedAt: now(), exitCode: result.code,
               newRequestIds: newRecords.map((item) => item.requestId),
+              newRequestRecords: newRecords.map(recordEvidence),
               ...(success ? { completedRequestId: record.requestId, completedRecordHash: hash(JSON.stringify(record)) } : {}) });
             await persist();
             if (!success) signalActiveChildren(activeChildren);
@@ -342,8 +503,10 @@ export async function runFollowThrough({ rootDir = PROJECT_ROOT, queryService = 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const args = process.argv.slice(2);
-    if (args.length > 1 || (args.length === 1 && !['--execute', '--status', '--help'].includes(args[0]))) review('INVALID_ARGUMENTS', 'Use --status (default) or --execute.');
-    if (args[0] === '--help') console.log('Usage: node scripts/follow-through.mjs [--status | --execute]\nDefault is read-only status. --execute monitors the existing translation service every 30 seconds and permits at most one exact-batch retry for a known-usage HTTP 200 schema failure, with a persistent cap of 20 retry requests.');
+    const acknowledge = args.length === 2 && args[0] === '--acknowledge-manual-recovery' && /^[a-zA-Z0-9-]{1,100}$/.test(args[1]);
+    if (!acknowledge && (args.length > 1 || (args.length === 1 && !['--execute', '--status', '--help'].includes(args[0])))) review('INVALID_ARGUMENTS', 'Use --status, --execute, or --acknowledge-manual-recovery ORIGINAL_FAILED_REQUEST_ID.');
+    if (args[0] === '--help') console.log('Usage: node scripts/follow-through.mjs [--status | --execute | --acknowledge-manual-recovery ORIGINAL_FAILED_REQUEST_ID]\nDefault is read-only status. --execute permits one exact-batch retry for a known-usage HTTP 200 schema failure, with a persistent cap of 20 automatic retry reservations. Manual acknowledgement validates completed journals and saved output, then updates only the local ledger; it never calls an API or starts a service.');
+    else if (acknowledge) console.log(JSON.stringify(await acknowledgeManualRecovery({ failedRequestId: args[1] }), null, 2));
     else if (args[0] === '--execute') { const result = await runFollowThrough(); console.log(JSON.stringify(result, null, 2)); if (result.state !== 'completed') process.exitCode = 1; }
     else console.log(JSON.stringify(await readFollowThroughStatus(), null, 2));
   } catch (error) {
