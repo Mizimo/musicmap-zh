@@ -254,9 +254,11 @@ test('Traditional-only glossary changes preserve Simplified cache; preferred Sim
     glossary.terms.find((term) => term.id === 'blues')[property] = value;
     await mkdir(join(directory, 'lib'), { recursive: true });
     await mkdir(join(directory, 'data'), { recursive: true });
+    await mkdir(join(directory, 'public'), { recursive: true });
     await Promise.all([
       writeFile(join(directory, 'lib/translator.mjs'), translatorCode),
       writeFile(join(directory, 'lib/terminology.mjs'), terminologyCode),
+      writeFile(join(directory, 'public/chapter-renderer.js'), await readFile(new URL('../public/chapter-renderer.js', import.meta.url))),
       writeFile(join(directory, 'data/terminology.json'), JSON.stringify(glossary)),
     ]);
     return (await import(pathToFileURL(join(directory, 'lib/translator.mjs')).href)).createTranslator;

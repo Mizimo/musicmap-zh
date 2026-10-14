@@ -1,4 +1,21 @@
+> **目前授權（2026-10-15，全站完成＋GitHub 同步；取代下方450停點）**：已 inspect 主要窗口核對人類原話「推進到全部完成並同步github」。主要窗口執行範圍為 562 唯一正文／572映射＋1338獨立UI／圖上標籤＝1900來源；正式 build 簡繁全覆蓋後才可稱完成。独立新入口 `node scripts/complete-site.mjs --prepare|--execute|--status|--recover|--build`，新 run `artifacts/full-site/2026-10-15-complete/`，帳本 `generated/production/full-site-complete.json`。復用450正文及25本機復原；原詞典／術語正規化可核驗prefill164，剩112正文＋1174標籤／59組，計畫新請求上限171（歷史續作612、pilot十次另計）。上述數字和private release成品安排屬主要窗口解讀，不冒充使用者逐字要求。原body prompt／來源／catalog／術語與Pro thinking/max/32768固定，label獨立身分／嚴格用量驗證、單工Restart=no；不自動付費重試，新增unknown即停並回報。保留所有舊run、ledger、journal與unknown；父run凍結後不再寫入或增檔。全面三語雙裝置與私有入口驗收後更新既有预覽，再同步Mizimo/musicmap-zh私人repo main及不含密鑰／journal／node_modules的本機成品release；逐項審閱變更，非force，不把私人網址、session ID或私人資料寫進通用repo文件。caption adapter納入正式build可追蹤程式，不改UI、不做新對照報告。授權工作證據在 `generated/production/full-site-authorization.json`。
+
+> **歷史停點（2026-10-14，80% 已交付；已由上方全站授權取代）**：正文恰好 **450／562 個唯一 source（460 處映射）**，帳本 `target-reached`；本次 **224／224 次**、歷史 **441 次**，原十批另計。224 筆原 journal 為 220 completed＋4 failed，4 筆均有本機復原 sidecar；舊 #217 unknown／usage null 與全部歷史保持原樣。翻譯服務 `musicmap-chapter-80pct.service` 已停止（`MainPID=0`、`Restart=no`），不得因接手、驗收或重建而繼續付費請求。merge／原術語 OpenCC／partial build 已完成；215 個回歸測試、348 次 genre 語言檢查、1824 次靜態映射檢查，以及 Tailnet 真實中文搜尋／原站隱私連結開關均通過。未翻正文維持整章英文回退，保留未完成標示，沒有 UI 改版或新對照報告。
+
+> **歷史80%預覽與重建**：歷史私有／本機入口僅記錄於本機工作證據，建置位於 `artifacts/chapter-continuation/2026-10-14-body-80pct/workspace/dist/`。8444 僅限 Tailnet，其他 Serve 端口不變。兩處原站動態 SVG 圖說採版本化、僅作用於衍生 build 的 adapter；不改凍結來源、翻譯或原 renderer。若重新建置，依序執行 `node scripts/continue-chapters-80.mjs --build` 與 `node artifacts/chapter-continuation/2026-10-14-body-80pct/apply-preview-caption-fix.mjs`，重新驗收後才更新預覽。證據在同 run 的 `preview-runtime-amendment.json`、`browser-verification.json`、`preview-http-verification.json`、`tailnet-navigation-verification.json`、`preview-deployment-verification.json`。genre 正文沒有 inline anchor；實際連結點擊驗收使用原站 privacy link／原 close 按鈕，不能以空 anchor 清單宣稱 genre 內鏈點擊通過。
+
+> **歷史授權（2026-10-14，80%續作）**：已在主要窗口原訊息核實使用者原話「可以繼續推進musicmap到80%」。主要窗口設定執行邊界為恰好 **450／562 個唯一正文 source**（約 80.1%），先核驗復用既有 **226** 個，最多新增 **224 次請求**；連同舊 217 次續作嘗試，歷史上限 **441 次**，原十批另計。這些精確數字與補發安排是主要窗口的執行解讀，不冒充使用者逐字原話。第一筆新請求可補發舊 #217 `genre:hou03`，使用新 ID 並連結舊 request；原未知用量／結果永遠保留，可能重複計費。不自動付費重試，失敗占名額；新增未知用量／身分、不確定語意修補、有效基數不同或無法在上限內到 450 即停止回報。沿用已驗證且可確定的本機格式復原。固定 `deepseek-v4-pro`／thinking enabled／`reasoning_effort=max`／`max_tokens=32768`／非串流／單工／`Restart=no`，原 prompt、來源、catalog、術語皆不變。新入口 `node scripts/continue-chapters-80.mjs --prepare|--execute|--status|--recover|--build`，獨立帳本 `generated/production/chapter-continuation-80pct.json`，run `artifacts/chapter-continuation/2026-10-14-body-80pct/`。原 50% run、帳本、停止快照、原十批與封存證據保持不變，另存完整父 run 快照。啟動前通過精確停點、額度、復用與未知停止等離線測試。450 後 merge、OpenCC、partial build、實際瀏覽器驗收並沿用私有預覽；保留整章英文回退，不做新報告、不改 UI、不恢復舊碎片入口。授權證據在 `generated/production/chapter-continuation-80-authorization.json`。
+
+> **歷史授權（50%，已由上方 80% 取代；舊 run 不再執行）**：舊目標 281／562、最多 271 次。實際停止在有效 226、已嘗試 217，其中 #217 連線失敗且用量未知。帳本 `generated/production/chapter-continuation-50pct.json`、run `artifacts/chapter-continuation/2026-10-14-body-50pct/` 均保留原樣，不重置、不改成零費用或成功。
+
+> **歷史首輪停點（2026-10-14）**：完整章節首輪已完成 **10/10 次、10 章／30 段**，零失敗、零重試，70,350 tokens（輸入 11,775；輸出 58,575，其中思考 52,553），保存價表估算 US$0.121790064。狀態 `awaiting-review`，十次名額已全部用完；不得續跑、重置額度或另建 run 繞過。原始程式基線／全部歷史已歸檔；新稿只在隔離工作目錄，未正式採用、未覆蓋原預覽。報告在 `artifacts/chapter-pilot/2026-10-14-pro-max-10/report.html`。後續只准本機驗證／報告整理；任何追加翻譯需要使用者新的範圍指示。
+
+> **歷史首輪授權（2026-10-14）：舊碎片版已封存退役。** 使用者已批准以優化前基線實作完整段落／章節翻譯，首輪只准 10 次 API 嘗試（失敗亦占名額、不自動重試）。固定 `deepseek-v4-pro`、thinking enabled、reasoning_effort=max、max_tokens=32768。全部歷史成果在 `artifacts/archives/v1-fragments-retired-2026-10-13T17-08-57Z/`；唯一新入口為 `npm run production -- --chapter-pilot --prepare|--execute|--status|--report`。先通過離線測試才執行。十次完成後停止並作對照報告，不能续跑全站、採用舊碎片快取或覆蓋現有預覽。`generated/production/retired.json` 優先於下方全部歷史授權。新執行紀錄：`artifacts/chapter-pilot/2026-10-14-pro-max-10/`。
+
 # 接手本專案的 Agent 請先閱讀
+
+> **使用者暫停指示（2026-10-13）**：本輪在目前已送出的批次完成並保存後暫停。不得送出下一批、重試失敗批次、啟動任何翻譯／恢復服務，或自行恢復完整跟進。須等使用者明確要求續跑；本機暫停狀態見 `generated/production/independent-mode.json`。Pro / Max 與思考模式固定保留，尚未套用討論中的省 token 架構。
+
 
 ## 已確認的目標與目前狀態
 

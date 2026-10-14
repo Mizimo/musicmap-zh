@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { atomicJson, loadSource, PROJECT_ROOT, shardForText, validateShardWrapper } from './translate.mjs';
+import { assertLegacyTranslationAllowed } from '../lib/translation-retirement.mjs';
 
 export const SHARD_COUNT = 8;
 export const PRODUCTION_CONFIG = Object.freeze({
@@ -127,6 +128,7 @@ async function verifyShardDirectory(rootDir) {
 export async function prepareProduction({
   rootDir = PROJECT_ROOT, machine = hostname(), authSourceFile = join(homedir(), '.ssh/musicmap_trans'),
 } = {}) {
+  await assertLegacyTranslationAllowed(rootDir);
   const release = await acquireProductionLock(rootDir);
   try {
     const manifestFile = join(productionDirectory(rootDir), 'manifest.json');
@@ -299,6 +301,7 @@ export async function executeProduction({
   rootDir = PROJECT_ROOT, workers = SHARD_COUNT, runChild = runChildProcess,
   manageSignals = true, log = console.log,
 } = {}) {
+  await assertLegacyTranslationAllowed(rootDir);
   if (!Number.isSafeInteger(workers) || workers < 1 || workers > SHARD_COUNT) fail('INVALID_WORKERS', '--workers must be an integer from 1 through 8.');
   const release = await acquireProductionLock(rootDir);
   const directory = productionDirectory(rootDir);
@@ -423,7 +426,8 @@ export function parseProductionArguments(args) {
   let explicitMode = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
-    if (['--status', '--prepare', '--execute'].includes(argument)) {
+    if (argument === '--chapter-pilot') options.chapterPilot = true;
+    else if (['--status', '--prepare', '--execute', '--report'].includes(argument)) {
       if (explicitMode) fail('INVALID_ARGUMENTS', 'Choose exactly one of --status, --prepare, or --execute.');
       options.mode = argument.slice(2); explicitMode = true;
     } else if (argument === '--workers' || argument.startsWith('--workers=')) {
@@ -433,6 +437,7 @@ export function parseProductionArguments(args) {
     } else if (argument === '--help' || argument === '-h') options.help = true;
     else fail('INVALID_ARGUMENTS', 'Unsupported production argument. See --help.');
   }
+  if (options.mode === 'report' && !options.chapterPilot) fail('INVALID_ARGUMENTS', '--report requires --chapter-pilot.');
   return options;
 }
 
@@ -440,7 +445,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const options = parseProductionArguments(process.argv.slice(2));
     if (options.help) {
-      console.log('Usage: node scripts/production.mjs [--status | --prepare | --execute] [--workers 1-8]\n\nDefault --status is read-only. --prepare freezes inputs and seeds eight disjoint Simplified Chinese shards without API calls.\n--execute starts isolated DeepSeek V4 Pro / Max workers using the credential file recorded in the manifest.\nNo automatic retries or stale-lock takeover. Existing completed translations are preserved.\nSuccessful translation is followed by merge, local Traditional Chinese conversion, strict build, and browser verification.');
+      console.log('Usage: node scripts/production.mjs --chapter-pilot [--status | --prepare | --execute | --report]\n\nThe whole-chapter pilot preserves eight source-hash shards and uses one global ten-attempt budget.\n--prepare freezes full chapter inputs without an API call. --execute sends at most ten sequential Pro Max requests, including failed attempts, with no retries.\n--report creates comparison artifacts and an isolated partial build without publishing or adopting the trial.\nDefault --status is read-only. Legacy production has been retired in this workspace.');
+    } else if (options.chapterPilot) {
+      const { chapterPilotCommand } = await import('../lib/chapter-pilot.mjs');
+      const result = await chapterPilotCommand(options.mode);
+      console.log(JSON.stringify(result, null, 2));
     } else {
       const result = options.mode === 'prepare' ? await prepareProduction()
         : options.mode === 'execute' ? await executeProduction({ workers: options.workers }) : await readProductionStatus();
@@ -448,7 +457,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       if (options.mode === 'execute' && result.state !== 'completed') process.exitCode = 1;
     }
   } catch (error) {
-    console.error(error instanceof ProductionError
+    console.error(error instanceof ProductionError || error.code?.startsWith('PILOT_') || ['TRANSLATION_RETIRED','UNRESOLVED_ATTEMPT'].includes(error.code)
       ? `Production stopped [${error.code}]: ${error.message}`
       : 'Production stopped: an internal file or process operation failed. Existing progress was preserved.');
     process.exitCode = 1;

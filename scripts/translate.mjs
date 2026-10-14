@@ -8,6 +8,8 @@ import { loadTranslationContexts } from '../lib/translation-context.mjs';
 import { acquireTranslationLock, createTranslationJournal, readTranslationKey } from '../lib/translation-journal.mjs';
 import { dictionary } from '../public/dictionary.js';
 import { TERMINOLOGY, TERMINOLOGY_HASH } from '../lib/terminology.mjs';
+import { assertLegacyTranslationAllowed } from '../lib/translation-retirement.mjs';
+import { isChapterSource, readUnitCatalog, validateChapterTranslation } from '../lib/chapter-units.mjs';
 
 export const LANGUAGES = ['zh-Hans', 'zh-Hant'];
 export const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -64,6 +66,7 @@ export async function loadSource(rootDir) {
       throw new Error(`Source string at index ${index} must be a string of at most 5000 characters. Split long text during extraction.`);
     }
   }
+  await readUnitCatalog(rootDir, original);
   return {
     sourceHash: createHash('sha256').update(JSON.stringify(original)).digest('hex'),
     source: [...new Set(original)],
@@ -108,6 +111,7 @@ export function validateShardWrapper(wrapper, { sourceHash, source, language, sh
     if (typeof translation !== 'string' || translation.trim().length === 0) {
       throw new Error(`${label}: every translation must be a nonempty string.`);
     }
+    if (isChapterSource(text)) validateChapterTranslation(text, translation);
   }
   return wrapper;
 }
@@ -159,6 +163,7 @@ export function makeBatches(texts, { maxTexts = 20, maxCharacters = 14_000 } = {
 
 export async function runTranslation(options = {}) {
   if (options.dryRun) return performTranslation(options);
+  await assertLegacyTranslationAllowed(options.rootDir ?? PROJECT_ROOT);
   const shard = options.shard === undefined ? null : validateShard(options.shard);
   const scope = shard ? `zh-Hans-${shard.index}-of-${shard.count}` : 'zh-Hans';
   const release = await acquireTranslationLock(options.rootDir ?? PROJECT_ROOT, scope);

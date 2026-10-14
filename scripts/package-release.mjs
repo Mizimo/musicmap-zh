@@ -154,12 +154,12 @@ export async function verifyRelease({ rootDir = PROJECT_ROOT } = {}) {
   };
 }
 
-function releaseReadme(total) {
+function releaseReadme(total,bodyTotal) {
   return `# Musicmap 完整簡繁中文閱讀版\n\n已預先完成 ${total} 個來源片段的簡體翻譯，繁體由本機 OpenCC 與音樂術語校正產生；介面可切換簡體、繁體與英文。閱讀與切換語言不需要 API Key，也不會呼叫翻譯 API。\n\n## 本機啟動\n\n需要 Node.js 22 或更新版本。解壓後，在本檔所在資料夾執行：\n\n\`\`\`bash\nnode server.mjs\n\`\`\`\n\n瀏覽器開啟 http://localhost:4173 。不需要 npm install。伺服器僅監聽本機 127.0.0.1；結束時按 Ctrl+C。\n\n也可使用 Python 3：\n\n\`\`\`bash\npython3 -m http.server 4173 --bind 127.0.0.1 --directory dist\n\`\`\`\n\n請經由 HTTP 開啟；不要直接雙擊 dist/index.html。若使用其他靜態伺服器，將 dist/ 設為網站根目錄，勿掛在子路徑。原站地圖、語言檔與所需本機資產均在 dist/；YouTube、Spotify 及外站連結仍需要網路。\n\n## 檔案驗證\n\nSHA256SUMS.txt 列出所有交付檔案（不含校驗表本身）的 SHA-256。在目前資料夾執行：\n\n\`\`\`bash\nsha256sum -c SHA256SUMS.txt\n# macOS 可改用：shasum -a 256 -c SHA256SUMS.txt\n\`\`\`\n\nRELEASE-MANIFEST.json 記錄來源、簡繁及術語 hash、轉換版本、建置與瀏覽器驗收時間。完整度及功能驗證不代表人工文字品質評分。\n\n來源與署名見 SOURCE.txt 及網站內原有資訊。\n`;
 }
 
 /** Create an allowlisted static-site archive; never traverse private runtime directories. */
-export async function packageRelease({ rootDir = PROJECT_ROOT, output, date = new Date() } = {}) {
+export async function packageRelease({ rootDir = PROJECT_ROOT, output, date = new Date(), fullRun } = {}) {
   rootDir = resolve(rootDir);
   if (!(date instanceof Date) || !Number.isFinite(date.getTime())) fail('INVALID_DATE', 'The release date is invalid.');
   const destination = resolve(rootDir, output ?? `artifacts/musicmap-zh-complete-${date.toISOString().slice(0, 10)}.tar.gz`);
@@ -167,15 +167,20 @@ export async function packageRelease({ rootDir = PROJECT_ROOT, output, date = ne
   if (!/^artifacts\//.test(localOutput) || !/\.tar\.gz$/.test(destination) || !/^[A-Za-z0-9._-]+$/.test(basename(destination))) {
     fail('INVALID_OUTPUT', 'Write the release to artifacts/ with a plain filename ending in .tar.gz.');
   }
-  const verified = await verifyRelease({ rootDir });
+  const verified = fullRun
+    ? await (await import('./package-full-site.mjs')).verifyFullSiteRelease({ rootDir, run: fullRun })
+    : await verifyRelease({ rootDir });
   const buffers = new Map(verified.buffers);
-  buffers.set('README.md', Buffer.from(releaseReadme(verified.total)));
+  let readme = releaseReadme(verified.total,verified.bodyTotal);
+  if(verified.bodyTotal) readme=readme.replace(`${verified.total} 個來源片段`,`${verified.total} 個來源單位（${verified.bodyTotal} 個完整正文＋${verified.labelTotal} 個介面／圖上標籤）`);
+  buffers.set('README.md', Buffer.from(readme));
   buffers.set('SOURCE.txt', Buffer.from('Original website: Musicmap — https://musicmap.info/\nThis is an unofficial local Chinese reading version. Original website credits, source links, and copyright notices remain in dist/index.html.\nOriginal content and website assets belong to their respective owners. This archive does not grant a new license to republish them.\nSimplified Chinese was prepared with DeepSeek V4 Pro / Max; Traditional Chinese is derived locally with OpenCC and project terminology preferences.\n'));
   const files = [...buffers].sort(([a], [b]) => a.localeCompare(b)).map(([path, data]) => ({ path, bytes: data.length, sha256: sha256(data) }));
   const releaseManifest = {
     schemaVersion: 1, createdAt: date.toISOString(), sourceUrl: verified.sourceUrl,
     sourceHash: verified.sourceHash, sourceFingerprint: verified.sourceFingerprint,
-    translation: { total: verified.total, languages: [...languages, 'en'], model: verified.model, reasoningEffort: verified.reasoningEffort, complete: true },
+    translation: { total: verified.total, languages: [...languages, 'en'], model: verified.model, reasoningEffort: verified.reasoningEffort, complete: true,
+      ...(verified.bodyTotal?{bodySources:verified.bodyTotal,labels:verified.labelTotal,thinking:verified.thinking,maxTokens:verified.maxTokens}:{}) },
     conversion: verified.conversion, productionCommit: verified.productionCommit,
     verification: { strictBuild: true, buildDate: verified.buildDate, browserPassedAt: verified.verifiedAt, productionCompletedAt: verified.productionFinishedAt },
     files,

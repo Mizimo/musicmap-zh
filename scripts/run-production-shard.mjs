@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { PROJECT_ROOT } from './translate.mjs';
 import { readProductionStatus, runChildProcess, signalActiveChildren, validateFrozenManifest } from './production.mjs';
 import { queryFollowThroughService, queryTranslationService } from './follow-through.mjs';
+import { assertLegacyTranslationAllowed } from '../lib/translation-retirement.mjs';
 
 function fail(code, message) { throw Object.assign(new Error(message), { code }); }
 
@@ -47,6 +48,7 @@ export async function runProductionShard({ rootDir = PROJECT_ROOT, execute = fal
   signal, manageSignals = true } = {}) {
   validateOptions({ execute, shard, limit, retryFailed });
   if (!execute) return { mode: 'read-only', production: await readProductionStatus({ rootDir }) };
+  await assertLegacyTranslationAllowed(rootDir);
   const children = new Set();
   let stopping = false;
   const stop = () => { stopping = true; signalActiveChildren(children); };

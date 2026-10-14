@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { normalizeUsage } from '../lib/benchmark-cost.mjs';
+import { assertLegacyTranslationAllowed } from '../lib/translation-retirement.mjs';
 import { loadTranslationContexts } from '../lib/translation-context.mjs';
 import { SIMPLIFIED_TERMINOLOGY_HASH, TERMINOLOGY_HASH } from '../lib/terminology.mjs';
 import { TRANSLATION_PROMPT_TEMPLATE_HASH, TRANSLATION_PROMPT_VERSION } from '../lib/translator.mjs';
@@ -369,6 +370,7 @@ export async function runFollowThrough({ rootDir = PROJECT_ROOT, queryService = 
   resumeService = startTranslationService, runChild = runChildProcess,
   sleep = (signal) => delay(RECOVERY_POLICY.pollMs, undefined, { signal }), signal,
   manageSignals = true, log = console.log } = {}) {
+  await assertLegacyTranslationAllowed(rootDir);
   const release = await acquireFollowThroughLock(rootDir);
   const controller = new AbortController();
   const activeChildren = new Set();

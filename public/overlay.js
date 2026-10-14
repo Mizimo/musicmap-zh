@@ -1,4 +1,5 @@
 import { dictionary } from './dictionary.js';
+import { createChapterRenderer } from './chapter-caption-renderer.js';
 
 const config = JSON.parse(document.getElementById('mmzh-config').textContent);
 const sourceKey = text => text.replace(/\s+/g, ' ').trim();
@@ -25,6 +26,8 @@ let scanning = false;
 let timer;
 let statusKind = 'loading';
 let searchEntries = [];
+let chapterRenderer = null;
+let chapterReady = !config.status.unitCatalogHash;
 
 const host = document.createElement('div');
 host.id = 'mmzh-root';
@@ -124,11 +127,11 @@ function fitMapText(element) {
 
 function eligible(node) {
   const p = node.parentElement;
-  return p && !p.closest('#mmzh-root,[data-mmzh-original],script,style,noscript,iframe,textarea,#right-side-pane-songlist,.song-title,#people-list') && /[a-zA-Z]{2}/.test(node.textContent) && node.textContent.trim().length > 1;
+  return p && !chapterRenderer?.managed(node) && !p.closest('#mmzh-root,[data-mmzh-original],script,style,noscript,iframe,textarea,#right-side-pane-songlist,.song-title,#people-list') && /[a-zA-Z]{2}/.test(node.textContent) && node.textContent.trim().length > 1;
 }
 
 function collect() {
-  for (const [node] of records) if (!node.isConnected) records.delete(node);
+  for (const [node] of records) if (!node.isConnected || chapterRenderer?.managed(node)) records.delete(node);
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     const node = walker.currentNode;
@@ -242,12 +245,18 @@ function apply() {
 }
 
 function scan() {
-  if (scanning) return;
+  if (scanning || !chapterReady) return;
   scanning = true;
   observer.disconnect();
-  collect(); apply();
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-  scanning = false;
+  try {
+    chapterRenderer?.locate();
+    collect(); apply();
+    chapterRenderer?.apply(language);
+  } catch (error) { updateStatus('error'); console.error('Unable to render validated chapter data:', error.message); }
+  finally {
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    scanning = false;
+  }
 }
 function schedule() { clearTimeout(timer); timer = setTimeout(scan, 220); }
 const observer = new MutationObserver(mutations => {
@@ -316,11 +325,17 @@ document.addEventListener('click', schedule);
 document.addEventListener('scroll', schedule, true);
 window.addEventListener('resize', schedule);
 renderUI(); scan();
-Promise.all(['zh-Hans', 'zh-Hant'].map(async lang => {
+const chapterCatalog = config.status.unitCatalogHash ? fetch('/_zh/units.json').then(async response => {
+  if (!response.ok) throw new Error('Unable to load chapter registry');
+  const catalog = await response.json();
+  if (catalog.catalogHash !== config.status.unitCatalogHash || catalog.protocol !== 'musicmap-chapters-v1') throw new Error('Chapter registry version mismatch');
+  chapterRenderer = createChapterRenderer({ document, catalog, lookup });
+}) : Promise.resolve();
+Promise.all([chapterCatalog, ...['zh-Hans', 'zh-Hant'].map(async lang => {
   const response = await fetch(`/_zh/locales/${lang}.json`);
   if (!response.ok) throw new Error('Unable to load locale');
   const entries = await response.json();
   for (const [original, translation] of Object.entries(entries)) {
     if (typeof translation === 'string') translated.set(`${lang}:${sourceKey(original)}`, translation);
   }
-})).then(() => { updateStatus('ready'); scan(); }).catch(() => updateStatus('error'));
+})]).then(() => { chapterReady = true; updateStatus('ready'); scan(); }).catch(() => updateStatus('error'));
