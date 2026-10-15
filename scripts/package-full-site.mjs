@@ -82,9 +82,12 @@ export async function verifyFullSiteRelease({rootDir,run=FULL_RUN}={}){
     productionCommit:execFileSync('git',['rev-parse','HEAD'],{cwd:rootDir,encoding:'utf8'}).trim(),buildDate:formal.builtAt,
     verifiedAt:browser.verifiedAt,productionFinishedAt:browser.verifiedAt,conversion:{sourceHash:conversion.sourceHash,simplifiedHash:conversion.simplifiedHash,traditionalHash:conversion.traditionalHash,terminologyHash:conversion.terminologyHash,converter:conversion.converter}};
 }
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+async function runCLI(){
  try{const args=process.argv.slice(2);if(args.some(a=>a!=='--check'))throw new Error('Usage: node scripts/package-full-site.mjs [--check]');
   if(args.includes('--check')){const v=await verifyFullSiteRelease();console.log(JSON.stringify({passed:true,total:v.total,body:v.bodyTotal,labels:v.labelTotal,sourceHash:v.sourceHash}));}
   else console.log(JSON.stringify(await packageRelease({fullRun:FULL_RUN,output:'artifacts/musicmap-zh-complete-2026-10-15.tar.gz'}),null,2));
  }catch(e){console.error(`Full-site package stopped: ${e.message}`);process.exitCode=1;}
 }
+
+// Finish module evaluation before packageRelease reimports the verifier.
+if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))void runCLI();

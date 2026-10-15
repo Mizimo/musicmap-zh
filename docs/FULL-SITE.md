@@ -8,7 +8,7 @@
 
 2026-10-15全1900來源簡繁有效覆蓋，8分片與原核驗證據逐字一致；正式build `allowPartial:false`、conversion四hash一致。新run恰172次、歷史613次、pilot10次另計，付費已停止。新帳本168 completed＋3 recovered-partial＋1 unknown；raw167 completed＋5 failed，原unknown及failed不重寫。最後20項真實輸出補齊6個漏項，3筆partial的54個原輸出均保留。原450正文、25歷史復原與本輪4個復原sidecar、父tree及凍結程式皆通過核驗。
 
-完整瀏覽器通過1608流派／1824靜態映射／6組1338標籤與實際DOM／6組caption、原事件與中文搜尋、EN逐章HTML還原，零pageerror／DeepSeek。本機及私有預覽19個成品檔案逐檔hash相同；實際TLS瀏覽器privacy原事件及中文搜尋後正文精確比對通過。253項自編mock測試在無私人資料的乾淨checkout全PASS、零跳過。完成停點不授權新的API執行；重建、打包與核驗均不需模型。
+完整瀏覽器通過1608流派／1824靜態映射／6組1338標籤與實際DOM／6組caption、原事件與中文搜尋、EN逐章HTML還原，零pageerror／DeepSeek。本機及私有預覽19個成品檔案逐檔hash相同；實際TLS瀏覽器privacy原事件及中文搜尋後正文精確比對通過。254項自編mock測試在無私人資料的乾淨checkout全PASS、零跳過。完成停點不授權新的API執行；重建、打包與核驗均不需模型。
 
 ## 準備與計數
 

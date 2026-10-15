@@ -32,7 +32,7 @@ npm test
 npx playwright install chromium
 ```
 
-一般與 pilot／50%／80%／全站控制流程的253項測試均使用自編 synthetic fixture 與 mock API，不需私人來源／journals，不產生付費請求。10／271／224／172 cap、未知停止、重啟不重付費與 hash proof 仍為必要測試，新 clone 不會跳過這些門檻。
+一般與 pilot／50%／80%／全站控制流程的254項測試均使用自編 synthetic fixture 與 mock API，不需私人來源／journals，不產生付費請求。10／271／224／172 cap、未知停止、重啟不重付費與 hash proof 仍為必要測試，新 clone 不會跳過這些門檻。
 
 真實 450 份正文／25 筆復原證據的整合核對另行執行：
 
