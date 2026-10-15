@@ -4,7 +4,7 @@ import {resolve} from 'node:path';
 import {createApp} from '../server.mjs';
 import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
-import {parseChapterTranslation} from '../public/chapter-renderer.js';
+import {parseChapterTranslation,stripChapterMarkers} from '../public/chapter-renderer.js';
 const run=resolve(process.argv[2]??'artifacts/full-site/2026-10-15-complete');
 const site=process.argv[3]?null:createApp({directory:join(run,'workspace/dist')});
 if(site)await new Promise(done=>site.listen(0,'127.0.0.1',done));
@@ -36,9 +36,13 @@ try{
  await page.locator('#mmzh-root #search').fill('噪音搖滾');const result=page.locator('#mmzh-root #results button').filter({hasText:/Noise Rock/i}).first();
  await expect(result).toBeVisible();await result.click();
  const pane=page.locator('#right-side-pane-genre-description');await expect(pane).toHaveAttribute('data-mmzh-chapter','genre:alt02');
+ const searchUnit=catalog.units.find(u=>u.id==='genre:alt02');
+ assert.equal(searchUnit.layout.length,1,'Noise Rock is a single paragraph; textContent can be compared byte for byte.');
+ await expect.poll(()=>pane.textContent()).toBe(stripChapterMarkers(traditional[searchUnit.source]));
+ const exactTranslatedSearchBody=true;
  assert.deepEqual(errors,[]);assert.ok(!requests.some(url=>/api\.deepseek\.com/.test(url)));
  const evidence={passed:true,verifiedAt:new Date().toISOString(),origin,chineseSearch:'噪音搖滾',searchTarget:'genre:alt02',
-  translatedAnchorNodePreserved:true,translatedAnchorNativeHandlerVerified:true,anchorTarget:'privacy-policy-side-pane',
+  exactTranslatedSearchBody,translatedAnchorNodePreserved:true,translatedAnchorNativeHandlerVerified:true,anchorTarget:'privacy-policy-side-pane',
   genreBodyAnchors:catalog.units.filter(u=>u.kind==='genre').flatMap(u=>Object.values(u.markers)).filter(m=>m.tag==='a').length,
   deepseekBrowserRequests:0,externalNetworkBlocked:true,errors};
  await writeFile(join(run,origin.startsWith('https:')?'tailnet-navigation-verification.json':'preview-navigation-verification.json'),JSON.stringify(evidence,null,2)+'\n');console.log(JSON.stringify(evidence));

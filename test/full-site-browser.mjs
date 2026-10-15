@@ -25,7 +25,7 @@ const builtHashes=await treeHashes(resolve(run,'workspace/dist'));
 const site=createApp({directory:resolve(run,'workspace/dist')});
 await new Promise(done=>site.listen(0,'127.0.0.1',done));
 const origin=`http://127.0.0.1:${site.address().port}`;
-const errors=[],requests=[],checks=[],staticChecks=[],labelChecks=[];let browser;
+const errors=[],requests=[],checks=[],staticChecks=[],labelChecks=[],captionChecks=[];let browser;
 const compact=s=>s.replace(/\s+/g,'');
 async function navigate(page,code){
  await page.evaluate(code=>{const family=document.querySelector(`#supergenres-list [data-code="${code}"]`);
@@ -37,7 +37,8 @@ async function navigate(page,code){
 }
 try{
  browser=await chromium.launch({headless:true});
- for(const [device,viewport] of [['desktop',{width:1440,height:960}],['mobile',{width:390,height:844}]]){
+ // Two independent read-only browser contexts; the paid worker stays serial.
+ await Promise.all([['desktop',{width:1440,height:960}],['mobile',{width:390,height:844}]].map(async([device,viewport])=>{
   const context=await browser.newContext({viewport});const page=await context.newPage();
   page.setDefaultTimeout(15000);page.setDefaultNavigationTimeout(30000);
   page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>requests.push(r.url()));
@@ -69,6 +70,17 @@ try{
    console.log(JSON.stringify({device,language:lang,stage:'static-verified'}));
   }
   await page.locator('#mmzh-root [data-lang="en"]').click();
+  const captions=catalog.units.filter(u=>u.targets.length===1&&['#genres-relations','#supergenres-blueprint'].includes(u.targets[0].selector));
+  assert.equal(captions.length,2);
+  await expect.poll(()=>page.evaluate(units=>units.map(u=>document.querySelector(`${u.targets[0].selector} > label.image-label`)?.textContent),captions)).toEqual(captions.map(u=>u.plainText));
+  await page.evaluate(units=>{
+    window.qaCaptions=units.map(u=>{
+      const parent=document.querySelector(u.targets[0].selector),label=parent.querySelector(':scope > label.image-label'),svg=parent.querySelector(':scope > svg');
+      if(!svg||parent.querySelectorAll(':scope > svg').length!==1)throw new Error(`Original caption SVG missing: ${u.id}`);
+      return {selector:u.targets[0].selector,parent,label,svg,children:[...parent.childNodes],originalLabelNodes:[...label.childNodes],originalLabelHTML:label.innerHTML,
+        svgAttributes:[...svg.attributes].map(a=>[a.name,a.value]),labelAttributes:[...label.attributes].map(a=>[a.name,a.value])};
+    });
+  },captions);
   const labelSources=catalog.source.filter(s=>!uniqueBody.includes(s));
   await page.evaluate(sources=>{
     const keys=new Set(sources),norm=s=>s.replace(/\s+/g,' ').trim();
@@ -100,6 +112,18 @@ try{
     },{lang,sources:labelSources,locale:locales[lang]??{}})).toEqual([]);
     const liveCounts=await page.evaluate(()=>({textNodes:window.qaRealLabels.filter(r=>r.node.isConnected).length,attributes:window.qaAttributes.filter(r=>r.node.isConnected).length}));
     labelChecks.push({device,language:lang,independentLabelFixture:labelSources.length,actualSourceDom:liveCounts});
+    const captionExpected=captions.map(u=>lang==='en'?u.plainText:stripChapterMarkers(locales[lang][u.source]));
+    await expect.poll(()=>page.evaluate(({lang,expected})=>window.qaCaptions.flatMap((r,i)=>{
+      const mismatches=[],parent=document.querySelector(r.selector),label=parent?.querySelector(':scope > label.image-label'),svg=parent?.querySelector(':scope > svg');
+      if(parent!==r.parent||label!==r.label||svg!==r.svg)mismatches.push(`${r.selector}: original node identity changed`);
+      if([...parent.childNodes].length!==r.children.length||r.children.some((n,j)=>parent.childNodes[j]!==n))mismatches.push(`${r.selector}: original child order changed`);
+      if(label.textContent!==expected[i])mismatches.push(`${r.selector}: caption text differs`);
+      if(JSON.stringify([...svg.attributes].map(a=>[a.name,a.value]))!==JSON.stringify(r.svgAttributes))mismatches.push(`${r.selector}: SVG attributes changed`);
+      if(JSON.stringify([...label.attributes].map(a=>[a.name,a.value]))!==JSON.stringify(r.labelAttributes))mismatches.push(`${r.selector}: label attributes changed`);
+      if(lang==='en'&&(label.innerHTML!==r.originalLabelHTML||label.childNodes.length!==r.originalLabelNodes.length||r.originalLabelNodes.some((n,j)=>label.childNodes[j]!==n)))mismatches.push(`${r.selector}: original English nodes not restored`);
+      return mismatches;
+    }),{lang,expected:captionExpected})).toEqual([]);
+    captionChecks.push({device,language:lang,captions:captions.length,exactText:true,originalSvgAndLabelIdentity:true,attributesAndPositionPreserved:true,...(lang==='en'?{originalEnglishNodesRestored:true}:{})});
     console.log(JSON.stringify({device,language:lang,stage:'all-labels-and-actual-source-dom-verified',...liveCounts}));
   }
   await page.evaluate(()=>document.getElementById('qa-complete-label-fixture').remove());
@@ -142,13 +166,13 @@ try{
   if(fresh){await navigate(page,fresh.genreId);await expect(page.locator('#supergenre-side-pane-genre-description')).toHaveAttribute('data-mmzh-chapter',fresh.id);}
   await page.screenshot({path:resolve(run,`preview-${device}.png`)});
   await context.close();
- }
+ }));
  assert.deepEqual(errors,[]);assert.ok(!requests.some(url=>/api\.deepseek\.com/.test(url)));
  assert.deepEqual(await treeHashes(resolve(run,'workspace/dist')),builtHashes,'Built files changed during browser verification.');
  const evidence={passed:true,verifiedAt:new Date().toISOString(),bodyCompleted:562,bodyTotal:562,labelsCompleted:1338,totalCompleted:1900,
   genreLanguageChecks:checks.length,checks,staticChecks,englishExactRestore:true,inlineLinkAttributesPreserved:true,
   originalNavigation:true,sourceSvgPreserved:true,mapZoom:{desktop:'original button',mobile:'wheel'},
-  fullSourceCoverage:true,formalCompleteLabelVisible:true,labelChecks,buildFileHashes:builtHashes,
+  fullSourceCoverage:true,formalCompleteLabelVisible:true,labelChecks,captionChecks,buildFileHashes:builtHashes,
   browserScriptHash:sha256(await readFile(new URL(import.meta.url))),externalNetworkBlocked:true,deepseekBrowserRequests:0,
   inheritedBaselineLimitations:['At 390px the original reader toolbar covers the original zoom-in button; original UI is retained and wheel zoom was verified.'],errors};
  await writeFile(resolve(run,'browser-verification.json'),JSON.stringify(evidence,null,2)+'\n');

@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | `whole-body-pro-max-50pct-v1` | 舊281目標；實際226正文、217續作嘗試，末筆unknown | 原帳本／failed journal／usage null不重寫 |
 | `whole-body-pro-max-80pct-v1` | 450正文／460映射；224新增、歷史441次 | 220 raw completed＋4 raw failed免費復原；父run凍結 |
-| `whole-site-pro-max-complete-v1` | 562正文＋1338獨立標籤，1900source全站目標，執行中 | 復用450／25復原，164 prefill；初定171新增，正文及label身分分列 |
+| `whole-site-pro-max-complete-v1` | 562正文＋1338獨立標籤，1900source全站完成；正式非partial build、三語雙裝置驗收通過 | 復用450／25復原，164 prefill；初定171新增，人類核定原#38單次補發後為172／歷史613；原unknown與新ID分列；三筆partial原54輸出保留，6缺項於最後20項真實完成 |
 
 後續授權不重置pilot或父run額度。全站新unknown立即停止交回；若另有核定補發，保留原unknown、用量null與新ID連結，再保存scope／cap修正，不能算成零費用。成品與程式只同步既有私人repo，操作見[FULL-SITE.md](FULL-SITE.md)。
 
